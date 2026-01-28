@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FootBrief Telegram Bot
+FootBrief Telegram Bot - Koyeb Web Service Version
 Bot de rÃ©sumÃ©s de matchs de football avec modÃ¨le freemium
+Utilise webhook Telegram + serveur Starlette
 """
 
 import os
 import json
 import logging
+import asyncio
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
+from starlette.requests import Request
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -29,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8557397197:AAGe0JW04sKQFL-JAnY0SUK8g3QL4ACGkus')
 GOOGLE_SHEET_ID = os.environ.get('GOOGLE_SHEET_ID', '1y6qjUmY90MdRqoa5UXOZ2EUgFrXO_7GuaG6CMa7Kwkk')
+WEBHOOK_PATH = "/webhook"
+PORT = int(os.environ.get('PORT', 8000))
 
 # Championnats disponibles
 LEAGUES = {
@@ -48,382 +59,468 @@ LEAGUES = {
     'lg_ar': {'name': 'ð¦ð· Liga Argentina', 'category': 'americas'},
     'lg_mx': {'name': 'ð²ð½ Liga MX', 'category': 'americas'},
     'lg_us': {'name': 'ðºð¸ MLS', 'category': 'americas'},
-    # Afrique & Asie
-    'lg_sa': {'name': 'ð¸ð¦ Saudi Pro League', 'category': 'africa_asia'},
-    'lg_jp': {'name': 'ð¯ðµ J-League', 'category': 'africa_asia'},
-    'lg_cn': {'name': 'ð¨ð³ Chinese Super League', 'category': 'africa_asia'},
+    # CompÃ©titions
+    'lg_ucl': {'name': 'ð Champions League', 'category': 'competitions'},
+    'lg_uel': {'name': 'ð Europa League', 'category': 'competitions'},
+    'lg_uecl': {'name': 'ð Conference League', 'category': 'competitions'},
 }
 
+# CatÃ©gories de championnats
 CATEGORIES = {
-    'cat_europe_top': {'name': 'â­ Europe Top 5', 'leagues': ['lg_fr', 'lg_uk', 'lg_es', 'lg_de', 'lg_it']},
-    'cat_europe_other': {'name': 'ð Europe Autres', 'leagues': ['lg_pt', 'lg_nl', 'lg_be', 'lg_tr']},
-    'cat_americas': {'name': 'ð AmÃ©riques', 'leagues': ['lg_br', 'lg_ar', 'lg_mx', 'lg_us']},
-    'cat_africa_asia': {'name': 'ð Afrique & Asie', 'leagues': ['lg_sa', 'lg_jp', 'lg_cn']},
+    'europe_top': {'name': 'â­ Europe Top 5', 'emoji': 'â­'},
+    'europe_other': {'name': 'ð Europe Autres', 'emoji': 'ð'},
+    'americas': {'name': 'ð AmÃ©riques', 'emoji': 'ð'},
+    'competitions': {'name': 'ð CompÃ©titions', 'emoji': 'ð'},
 }
 
-# Google Sheets client
-sheets_client = None
+# Stockage utilisateurs en mÃ©moire (pour dÃ©mo - utiliser une DB en production)
+user_data = {}
+
+# Global application instance
+telegram_app: Application = None
 
 
-def init_google_sheets():
-    """Initialise la connexion Ã  Google Sheets"""
-    global sheets_client
+def get_google_sheets_client():
+    """Initialise le client Google Sheets"""
     try:
         creds_json = os.environ.get('GOOGLE_CREDENTIALS')
         if creds_json:
             creds_dict = json.loads(creds_json)
-            scopes = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            sheets_client = gspread.authorize(credentials)
-            logger.info("Google Sheets connectÃ© avec succÃ¨s")
+            creds = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+            )
         else:
-            logger.warning("GOOGLE_CREDENTIALS non dÃ©fini - mode sans persistance")
+            creds = Credentials.from_service_account_file(
+                'credentials.json',
+                scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+            )
+        return gspread.authorize(creds)
     except Exception as e:
         logger.error(f"Erreur connexion Google Sheets: {e}")
+        return None
 
 
-def get_user_data(user_id: int) -> dict:
-    """RÃ©cupÃ¨re les donnÃ©es d'un utilisateur depuis Google Sheets"""
-    if not sheets_client:
-        return {'is_premium': False, 'selected_league': None, 'free_selection_used': False}
+def get_user_subscription(user_id: int) -> dict:
+    """RÃ©cupÃ¨re les infos d'abonnement d'un utilisateur"""
+    if user_id not in user_data:
+        user_data[user_id] = {
+            'is_premium': False,
+            'free_briefs_today': 0,
+            'last_brief_date': None,
+            'favorite_leagues': []
+        }
     
-    try:
-        sheet = sheets_client.open_by_key(GOOGLE_SHEET_ID).sheet1
-        records = sheet.get_all_records()
-        
-        for record in records:
-            if str(record.get('user_id')) == str(user_id):
-                return {
-                    'is_premium': record.get('is_premium', 'false').lower() == 'true',
-                    'selected_league': record.get('selected_league'),
-                    'free_selection_used': record.get('free_selection_used', 'false').lower() == 'true',
-                    'username': record.get('username', ''),
-                    'first_name': record.get('first_name', ''),
-                }
-        return {'is_premium': False, 'selected_league': None, 'free_selection_used': False}
-    except Exception as e:
-        logger.error(f"Erreur lecture utilisateur: {e}")
-        return {'is_premium': False, 'selected_league': None, 'free_selection_used': False}
-
-
-def save_user_data(user_id: int, username: str, first_name: str, data: dict):
-    """Sauvegarde les donnÃ©es d'un utilisateur dans Google Sheets"""
-    if not sheets_client:
-        return
+    # Reset compteur si nouveau jour
+    today = datetime.now().strftime('%Y-%m-%d')
+    if user_data[user_id]['last_brief_date'] != today:
+        user_data[user_id]['free_briefs_today'] = 0
+        user_data[user_id]['last_brief_date'] = today
     
-    try:
-        sheet = sheets_client.open_by_key(GOOGLE_SHEET_ID).sheet1
-        records = sheet.get_all_records()
-        
-        # Chercher si l'utilisateur existe
-        row_index = None
-        for i, record in enumerate(records):
-            if str(record.get('user_id')) == str(user_id):
-                row_index = i + 2  # +2 car index commence Ã  1 et header
-                break
-        
-        row_data = [
-            str(user_id),
-            username or '',
-            first_name or '',
-            str(data.get('is_premium', False)).lower(),
-            data.get('selected_league', ''),
-            str(data.get('free_selection_used', False)).lower(),
-            datetime.now().isoformat()
-        ]
-        
-        if row_index:
-            # Mise Ã  jour
-            sheet.update(f'A{row_index}:G{row_index}', [row_data])
-        else:
-            # Nouvelle ligne
-            sheet.append_row(row_data)
-        
-        logger.info(f"DonnÃ©es utilisateur {user_id} sauvegardÃ©es")
-    except Exception as e:
-        logger.error(f"Erreur sauvegarde utilisateur: {e}")
+    return user_data[user_id]
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /start - Message de bienvenue"""
+def can_access_brief(user_id: int) -> tuple[bool, str]:
+    """VÃ©rifie si l'utilisateur peut accÃ©der Ã  un brief"""
+    sub = get_user_subscription(user_id)
+    
+    if sub['is_premium']:
+        return True, ""
+    
+    if sub['free_briefs_today'] >= 3:
+        return False, "ð Vous avez atteint votre limite de 3 briefs gratuits aujourd'hui.\n\nð Passez Premium pour un accÃ¨s illimitÃ©!"
+    
+    return True, ""
+
+
+def increment_brief_count(user_id: int):
+    """IncrÃ©mente le compteur de briefs"""
+    sub = get_user_subscription(user_id)
+    if not sub['is_premium']:
+        sub['free_briefs_today'] += 1
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /start"""
     user = update.effective_user
+    logger.info(f"Commande /start de {user.first_name} (ID: {user.id})")
     
-    # Enregistrer l'utilisateur
-    user_data = get_user_data(user.id)
-    if not user_data.get('selected_league'):
-        save_user_data(user.id, user.username, user.first_name, user_data)
-    
-    welcome_text = f"""
-â½ *Bienvenue sur FootBrief, {user.first_name}!*
+    welcome_text = f"""â½ **Bienvenue sur FootBrief, {user.first_name}!**
 
-Je suis ton assistant pour les rÃ©sumÃ©s de matchs de football.
+Je suis votre assistant pour des rÃ©sumÃ©s de matchs de football rapides et complets.
 
-ð *Offre Gratuite:*
-â¢ 1 championnat de ton choix
-â¢ RÃ©sumÃ©s quotidiens des matchs
+ð **Version Gratuite:**
+â¢ 3 briefs par jour
+â¢ AccÃ¨s Ã  tous les championnats
 
-ð *Premium:*
-â¢ Tous les championnats
-â¢ Alertes en temps rÃ©el
-â¢ Statistiques dÃ©taillÃ©es
+ð **Version Premium:**
+â¢ Briefs illimitÃ©s
+â¢ Alertes personnalisÃ©es
+â¢ Analyses dÃ©taillÃ©es
 
-Choisis une catÃ©gorie pour commencer:
-"""
-    
+Utilisez le menu ci-dessous pour commencer!"""
+
     keyboard = [
-        [InlineKeyboardButton("â­ Europe Top 5", callback_data="cat_europe_top")],
-        [InlineKeyboardButton("ð Europe Autres", callback_data="cat_europe_other")],
-        [InlineKeyboardButton("ð AmÃ©riques", callback_data="cat_americas")],
-        [InlineKeyboardButton("ð Afrique & Asie", callback_data="cat_africa_asia")],
-        [InlineKeyboardButton("ð Passer Premium", callback_data="premium_info")],
+        [InlineKeyboardButton("ð Voir les Ligues", callback_data="menu_ligues")],
+        [InlineKeyboardButton("â­ Mes Favoris", callback_data="menu_favoris")],
+        [InlineKeyboardButton("ð Premium", callback_data="menu_premium")],
+        [InlineKeyboardButton("â¹ï¸ Aide", callback_data="menu_aide")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         welcome_text,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /menu - Affiche le menu principal"""
-    keyboard = [
-        [InlineKeyboardButton("â­ Europe Top 5", callback_data="cat_europe_top")],
-        [InlineKeyboardButton("ð Europe Autres", callback_data="cat_europe_other")],
-        [InlineKeyboardButton("ð AmÃ©riques", callback_data="cat_americas")],
-        [InlineKeyboardButton("ð Afrique & Asie", callback_data="cat_africa_asia")],
-        [InlineKeyboardButton("âï¸ Mon abonnement", callback_data="my_subscription")],
-        [InlineKeyboardButton("ð Passer Premium", callback_data="premium_info")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "ð *Menu Principal*\n\nChoisis une catÃ©gorie:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """GÃ¨re les callbacks des boutons inline"""
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """GÃ¨re tous les callbacks des boutons inline"""
     query = update.callback_query
     await query.answer()
     
-    user = update.effective_user
-    user_data = get_user_data(user.id)
-    callback_data = query.data
+    data = query.data
+    user_id = query.from_user.id
+    logger.info(f"Callback '{data}' de l'utilisateur {user_id}")
+    
+    # Menu principal des ligues
+    if data == "menu_ligues":
+        await show_categories_menu(query)
     
     # CatÃ©gories
-    if callback_data.startswith('cat_'):
-        category = CATEGORIES.get(callback_data)
-        if category:
-            keyboard = []
-            for league_id in category['leagues']:
-                league = LEAGUES.get(league_id)
-                if league:
-                    # Marquer si c'est le championnat sÃ©lectionnÃ©
-                    name = league['name']
-                    if user_data.get('selected_league') == league_id:
-                        name = f"â {name}"
-                    keyboard.append([InlineKeyboardButton(name, callback_data=league_id)])
-            
-            keyboard.append([InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")])
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"*{category['name']}*\n\nChoisis un championnat:",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+    elif data.startswith("cat_"):
+        category = data.replace("cat_", "")
+        await show_leagues_in_category(query, category)
     
-    # SÃ©lection d'un championnat
-    elif callback_data.startswith('lg_'):
-        league = LEAGUES.get(callback_data)
-        if league:
-            # VÃ©rifier les restrictions freemium
-            if not user_data.get('is_premium'):
-                if user_data.get('free_selection_used') and user_data.get('selected_league') != callback_data:
-                    # DÃ©jÃ  un championnat gratuit sÃ©lectionnÃ©
-                    keyboard = [
-                        [InlineKeyboardButton("ð Passer Premium", callback_data="premium_info")],
-                        [InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")],
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    current_league = LEAGUES.get(user_data.get('selected_league', ''), {}).get('name', 'Inconnu')
-                    await query.edit_message_text(
-                        f"â ï¸ *Limite atteinte*\n\n"
-                        f"Tu as dÃ©jÃ  sÃ©lectionnÃ© *{current_league}* comme championnat gratuit.\n\n"
-                        f"Pour suivre plusieurs championnats, passe en *Premium*! ð",
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
-                    )
-                    return
-            
-            # Enregistrer la sÃ©lection
-            user_data['selected_league'] = callback_data
-            user_data['free_selection_used'] = True
-            save_user_data(user.id, user.username, user.first_name, user_data)
-            
-            keyboard = [
-                [InlineKeyboardButton("ð Voir les matchs", callback_data=f"matches_{callback_data}")],
-                [InlineKeyboardButton("ð Activer les alertes", callback_data=f"alerts_{callback_data}")],
-                [InlineKeyboardButton("â¬ï¸ Retour au menu", callback_data="back_main")],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"â *{league['name']}* sÃ©lectionnÃ©!\n\n"
-                f"Tu recevras maintenant les rÃ©sumÃ©s de ce championnat.\n\n"
-                f"Que veux-tu faire?",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+    # SÃ©lection d'une ligue
+    elif data.startswith("lg_"):
+        await show_league_matches(query, data, user_id)
+    
+    # Menu favoris
+    elif data == "menu_favoris":
+        await show_favorites_menu(query, user_id)
+    
+    # Menu premium
+    elif data == "menu_premium":
+        await show_premium_menu(query, user_id)
+    
+    # Menu aide
+    elif data == "menu_aide":
+        await show_help_menu(query)
     
     # Retour au menu principal
-    elif callback_data == 'back_main':
-        keyboard = [
-            [InlineKeyboardButton("â­ Europe Top 5", callback_data="cat_europe_top")],
-            [InlineKeyboardButton("ð Europe Autres", callback_data="cat_europe_other")],
-            [InlineKeyboardButton("ð AmÃ©riques", callback_data="cat_americas")],
-            [InlineKeyboardButton("ð Afrique & Asie", callback_data="cat_africa_asia")],
-            [InlineKeyboardButton("âï¸ Mon abonnement", callback_data="my_subscription")],
-            [InlineKeyboardButton("ð Passer Premium", callback_data="premium_info")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "ð *Menu Principal*\n\nChoisis une catÃ©gorie:",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+    elif data == "back_main":
+        await show_main_menu(query)
     
-    # Infos Premium
-    elif callback_data == 'premium_info':
-        keyboard = [
-            [InlineKeyboardButton("ð³ S'abonner (4.99â¬/mois)", callback_data="subscribe_premium")],
-            [InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "ð *FootBrief Premium*\n\n"
-            "AccÃ¨de Ã  tous les avantages:\n\n"
-            "â *Tous les championnats* - Plus de 15 ligues\n"
-            "â *Alertes temps rÃ©el* - Buts, cartons, rÃ©sultats\n"
-            "â *Statistiques dÃ©taillÃ©es* - xG, possession, tirs\n"
-            "â *RÃ©sumÃ©s personnalisÃ©s* - Ãquipes favorites\n"
-            "â *Sans publicitÃ©*\n\n"
-            "ð° *Seulement 4.99â¬/mois*",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    # Mon abonnement
-    elif callback_data == 'my_subscription':
-        status = "ð Premium" if user_data.get('is_premium') else "ð Gratuit"
-        league_name = LEAGUES.get(user_data.get('selected_league', ''), {}).get('name', 'Aucun')
-        
-        keyboard = []
-        if not user_data.get('is_premium'):
-            keyboard.append([InlineKeyboardButton("ð Passer Premium", callback_data="premium_info")])
-        keyboard.append([InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"âï¸ *Mon Abonnement*\n\n"
-            f"ð *Statut:* {status}\n"
-            f"â½ *Championnat:* {league_name}\n\n"
-            f"{'Passe en Premium pour dÃ©bloquer tous les championnats!' if not user_data.get('is_premium') else 'Merci pour ton soutien! ð'}",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    # Voir les matchs (placeholder)
-    elif callback_data.startswith('matches_'):
-        league_id = callback_data.replace('matches_', '')
-        league = LEAGUES.get(league_id, {})
-        
-        keyboard = [[InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"ð *Matchs {league.get('name', '')}*\n\n"
-            f"ð Chargement des matchs en cours...\n\n"
-            f"_(Les rÃ©sumÃ©s seront envoyÃ©s automatiquement aprÃ¨s chaque journÃ©e)_",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    # Activer les alertes (placeholder)
-    elif callback_data.startswith('alerts_'):
-        keyboard = [[InlineKeyboardButton("â¬ï¸ Retour", callback_data="back_main")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "ð *Alertes activÃ©es!*\n\n"
-            "Tu recevras des notifications pour:\n"
-            "â¢ DÃ©but des matchs\n"
-            "â¢ Buts marquÃ©s\n"
-            "â¢ RÃ©sultats finaux\n\n"
-            "_(FonctionnalitÃ© Premium - bientÃ´t disponible)_",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    # Abonnement Premium (placeholder)
-    elif callback_data == 'subscribe_premium':
-        keyboard = [[InlineKeyboardButton("â¬ï¸ Retour", callback_data="premium_info")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "ð³ *Paiement*\n\n"
-            "Le systÃ¨me de paiement sera bientÃ´t disponible.\n\n"
-            "En attendant, contacte @footbrief_support pour un accÃ¨s Premium! ð",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+    # Retour aux catÃ©gories
+    elif data == "back_categories":
+        await show_categories_menu(query)
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /help"""
-    await update.message.reply_text(
-        "â *Aide FootBrief*\n\n"
-        "*Commandes disponibles:*\n"
-        "/start - DÃ©marrer le bot\n"
-        "/menu - Afficher le menu\n"
-        "/help - Cette aide\n\n"
-        "*Comment Ã§a marche?*\n"
-        "1. Choisis un championnat\n"
-        "2. ReÃ§ois les rÃ©sumÃ©s automatiquement\n"
-        "3. Passe en Premium pour plus de championnats!\n\n"
-        "*Support:* @footbrief_support",
-        parse_mode='Markdown'
+async def show_main_menu(query):
+    """Affiche le menu principal"""
+    keyboard = [
+        [InlineKeyboardButton("ð Voir les Ligues", callback_data="menu_ligues")],
+        [InlineKeyboardButton("â­ Mes Favoris", callback_data="menu_favoris")],
+        [InlineKeyboardButton("ð Premium", callback_data="menu_premium")],
+        [InlineKeyboardButton("â¹ï¸ Aide", callback_data="menu_aide")]
+    ]
+    
+    await query.edit_message_text(
+        "â½ **Menu Principal**\n\nQue souhaitez-vous faire?",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-def main():
-    """Point d'entrÃ©e principal"""
-    # Initialiser Google Sheets
-    init_google_sheets()
+async def show_categories_menu(query):
+    """Affiche le menu des catÃ©gories"""
+    keyboard = []
+    for cat_id, cat_info in CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(
+            cat_info['name'],
+            callback_data=f"cat_{cat_id}"
+        )])
+    keyboard.append([InlineKeyboardButton("ð Retour", callback_data="back_main")])
     
-    # CrÃ©er l'application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    await query.edit_message_text(
+        "ð **Choisissez une catÃ©gorie:**",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_leagues_in_category(query, category: str):
+    """Affiche les ligues d'une catÃ©gorie"""
+    leagues_in_cat = {k: v for k, v in LEAGUES.items() if v['category'] == category}
+    
+    keyboard = []
+    for lg_id, lg_info in leagues_in_cat.items():
+        keyboard.append([InlineKeyboardButton(
+            lg_info['name'],
+            callback_data=lg_id
+        )])
+    keyboard.append([InlineKeyboardButton("ð Retour", callback_data="back_categories")])
+    
+    cat_name = CATEGORIES.get(category, {}).get('name', 'Ligues')
+    await query.edit_message_text(
+        f"**{cat_name}**\n\nSÃ©lectionnez un championnat:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_league_matches(query, league_id: str, user_id: int):
+    """Affiche les matchs d'une ligue depuis Google Sheets"""
+    # VÃ©rifier accÃ¨s
+    can_access, message = can_access_brief(user_id)
+    if not can_access:
+        keyboard = [[InlineKeyboardButton("ð Passer Premium", callback_data="menu_premium")],
+                    [InlineKeyboardButton("ð Retour", callback_data="back_categories")]]
+        await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    league_info = LEAGUES.get(league_id, {})
+    league_name = league_info.get('name', 'Ligue inconnue')
+    
+    # RÃ©cupÃ©rer donnÃ©es Google Sheets
+    client = get_google_sheets_client()
+    matches_text = ""
+    
+    if client:
+        try:
+            sheet = client.open_by_key(GOOGLE_SHEET_ID)
+            # Chercher l'onglet correspondant
+            worksheet_name = league_id.replace('lg_', '').upper()
+            try:
+                worksheet = sheet.worksheet(worksheet_name)
+                data = worksheet.get_all_records()
+                
+                if data:
+                    for match in data[:5]:  # Limite Ã  5 matchs
+                        home = match.get('home', match.get('Home', 'N/A'))
+                        away = match.get('away', match.get('Away', 'N/A'))
+                        score = match.get('score', match.get('Score', 'N/A'))
+                        date = match.get('date', match.get('Date', ''))
+                        matches_text += f"\nâ¢ {home} vs {away}: {score}"
+                        if date:
+                            matches_text += f" ({date})"
+                else:
+                    matches_text = "\n_Aucun match rÃ©cent disponible_"
+            except gspread.WorksheetNotFound:
+                matches_text = "\n_DonnÃ©es non disponibles pour cette ligue_"
+        except Exception as e:
+            logger.error(f"Erreur lecture Sheets: {e}")
+            matches_text = "\n_Erreur de chargement des donnÃ©es_"
+    else:
+        matches_text = "\n_Service temporairement indisponible_"
+    
+    # IncrÃ©menter compteur
+    increment_brief_count(user_id)
+    sub = get_user_subscription(user_id)
+    remaining = 3 - sub['free_briefs_today'] if not sub['is_premium'] else "â"
+    
+    text = f"""**{league_name}**
+
+ð **Derniers rÃ©sultats:**{matches_text}
+
+---
+_Briefs restants aujourd'hui: {remaining}_"""
+
+    keyboard = [
+        [InlineKeyboardButton("ð Actualiser", callback_data=league_id)],
+        [InlineKeyboardButton("ð Retour", callback_data="back_categories")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_favorites_menu(query, user_id: int):
+    """Affiche le menu des favoris"""
+    sub = get_user_subscription(user_id)
+    favorites = sub.get('favorite_leagues', [])
+    
+    if not favorites:
+        text = "â­ **Mes Favoris**\n\n_Vous n'avez pas encore de favoris._\n\nNaviguez dans les ligues et ajoutez-en!"
+    else:
+        text = "â­ **Mes Favoris**\n\n"
+        for fav in favorites:
+            if fav in LEAGUES:
+                text += f"â¢ {LEAGUES[fav]['name']}\n"
+    
+    keyboard = [[InlineKeyboardButton("ð Retour", callback_data="back_main")]]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_premium_menu(query, user_id: int):
+    """Affiche le menu premium"""
+    sub = get_user_subscription(user_id)
+    
+    if sub['is_premium']:
+        text = """ð **Vous Ãªtes Premium!**
+
+â Briefs illimitÃ©s
+â Alertes personnalisÃ©es
+â Analyses dÃ©taillÃ©es
+â Support prioritaire
+
+Merci pour votre soutien!"""
+    else:
+        text = """ð **Passez Premium!**
+
+ð **Gratuit:**
+â¢ 3 briefs/jour
+â¢ AccÃ¨s basique
+
+ð **Premium (4.99â¬/mois):**
+â¢ Briefs illimitÃ©s
+â¢ Alertes personnalisÃ©es
+â¢ Analyses dÃ©taillÃ©es
+â¢ Support prioritaire
+
+_Paiement sÃ©curisÃ© via Stripe_"""
+
+    keyboard = []
+    if not sub['is_premium']:
+        keyboard.append([InlineKeyboardButton("ð³ S'abonner", callback_data="subscribe_premium")])
+    keyboard.append([InlineKeyboardButton("ð Retour", callback_data="back_main")])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_help_menu(query):
+    """Affiche le menu d'aide"""
+    text = """â¹ï¸ **Aide - FootBrief**
+
+**Commandes:**
+â¢ /start - Menu principal
+â¢ /help - Cette aide
+
+**Comment Ã§a marche:**
+1. Choisissez une catÃ©gorie
+2. SÃ©lectionnez un championnat
+3. Consultez les derniers rÃ©sultats
+
+**Limites version gratuite:**
+â¢ 3 briefs par jour
+â¢ Reset Ã  minuit
+
+**Contact:**
+@FootBriefSupport
+
+**Version:** 2.0 (Webhook)"""
+
+    keyboard = [[InlineKeyboardButton("ð Retour", callback_data="back_main")]]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ============ STARLETTE WEB SERVER ============
+
+async def health_check(request: Request):
+    """Endpoint de healthcheck pour Koyeb"""
+    return JSONResponse({"status": "healthy", "service": "footbrief-bot"})
+
+
+async def webhook_handler(request: Request):
+    """Endpoint pour recevoir les updates Telegram"""
+    global telegram_app
+    try:
+        data = await request.json()
+        logger.info(f"Webhook reÃ§u: {json.dumps(data)[:200]}...")
+        
+        update = Update.de_json(data, telegram_app.bot)
+        await telegram_app.process_update(update)
+        
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"Erreur webhook: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+async def index(request: Request):
+    """Page d'accueil"""
+    return PlainTextResponse("FootBrief Telegram Bot - Running")
+
+
+async def setup_webhook():
+    """Configure le webhook Telegram au dÃ©marrage"""
+    global telegram_app
+    
+    # CrÃ©er l'application Telegram
+    telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     # Ajouter les handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", show_menu))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(button_callback))
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("help", lambda u, c: show_help_menu(u.callback_query) if u.callback_query else u.message.reply_text("Utilisez /start pour accÃ©der au menu")))
+    telegram_app.add_handler(CallbackQueryHandler(handle_callback))
     
-    # DÃ©marrer le bot
-    logger.info("FootBrief Bot dÃ©marrÃ©!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Initialiser l'application
+    await telegram_app.initialize()
+    
+    # Configurer le webhook
+    webhook_url = os.environ.get('WEBHOOK_URL')
+    if webhook_url:
+        full_webhook_url = f"{webhook_url}{WEBHOOK_PATH}"
+        await telegram_app.bot.set_webhook(url=full_webhook_url)
+        logger.info(f"Webhook configurÃ©: {full_webhook_url}")
+    else:
+        # Essayer de rÃ©cupÃ©rer l'URL Koyeb automatiquement
+        koyeb_url = os.environ.get('KOYEB_PUBLIC_DOMAIN')
+        if koyeb_url:
+            full_webhook_url = f"https://{koyeb_url}{WEBHOOK_PATH}"
+            await telegram_app.bot.set_webhook(url=full_webhook_url)
+            logger.info(f"Webhook configurÃ© via Koyeb: {full_webhook_url}")
+        else:
+            logger.warning("WEBHOOK_URL non dÃ©finie - webhook non configurÃ©")
+    
+    logger.info("Bot Telegram initialisÃ© avec succÃ¨s")
 
 
-if __name__ == '__main__':
-    main()
+async def cleanup_webhook():
+    """Nettoie Ã  l'arrÃªt"""
+    global telegram_app
+    if telegram_app:
+        await telegram_app.shutdown()
+        logger.info("Bot Telegram arrÃªtÃ©")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Gestion du cycle de vie de l'application"""
+    await setup_webhook()
+    yield
+    await cleanup_webhook()
+
+
+# Routes Starlette
+routes = [
+    Route("/", index),
+    Route("/health", health_check),
+    Route(WEBHOOK_PATH, webhook_handler, methods=["POST"]),
+]
+
+# Application Starlette
+app = Starlette(routes=routes, lifespan=lifespan)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
