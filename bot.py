@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FootBrief Telegram Bot - Version corrigee
+Your Weekly Football Resume (YWFR) - Telegram Bot
 Bot de resumes de matchs de football avec modele freemium
 Utilise webhook Telegram + serveur Starlette sur port 8000
 """
@@ -10,6 +10,7 @@ import os
 import json
 import logging
 import asyncio
+import traceback
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -28,10 +29,10 @@ from telegram.ext import (
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Configuration du logging
+# Configuration du logging - niveau DEBUG pour plus de details
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8557397197:AAGe0JW04sKQFL-JAn
 GOOGLE_SHEET_ID = os.environ.get('GOOGLE_SHEET_ID', '1y6qjUmY90MdRqoa5UXOZ2EUgFrXO_7GuaG6CMa7Kwkk')
 WEBHOOK_PATH = "/webhook"
 PORT = int(os.environ.get('PORT', 8000))
+
+# Nom du service
+SERVICE_NAME = "Your Weekly Football Resume"
+SERVICE_SHORT = "YWFR"
 
 # Emojis simples
 EMOJI_SOCCER = "\u26BD"      # â½
@@ -57,404 +62,694 @@ FLAG_DE = "\U0001F1E9\U0001F1EA"  # ð©ðª
 FLAG_BE = "\U0001F1E7\U0001F1EA"  # ð§ðª
 FLAG_NL = "\U0001F1F3\U0001F1F1"  # ð³ð±
 FLAG_PT = "\U0001F1F5\U0001F1F9"  # ðµð¹
-FLAG_CH = "\U0001F1E8\U0001F1ED"  # ð¨ð­
-FLAG_DK = "\U0001F1E9\U0001F1F0"  # ð©ð°
-FLAG_IE = "\U0001F1EE\U0001F1EA"  # ð®ðª
-FLAG_US = "\U0001F1FA\U0001F1F8"  # ðºð¸
+FLAG_TR = "\U0001F1F9\U0001F1F7"  # ð¹ð·
+FLAG_BR = "\U0001F1E7\U0001F1F7"  # ð§ð·
 FLAG_AR = "\U0001F1E6\U0001F1F7"  # ð¦ð·
 FLAG_MX = "\U0001F1F2\U0001F1FD"  # ð²ð½
-FLAG_MA = "\U0001F1F2\U0001F1E6"  # ð²ð¦
-FLAG_KR = "\U0001F1F0\U0001F1F7"  # ð°ð·
-FLAG_EU = "\U0001F1EA\U0001F1FA"  # ðªðº
-FLAG_WORLD = "\U0001F30D"         # ð
+FLAG_US = "\U0001F1FA\U0001F1F8"  # ðºð¸
+FLAG_SA = "\U0001F1F8\U0001F1E6"  # ð¸ð¦
+FLAG_JP = "\U0001F1EF\U0001F1F5"  # ð¯ðµ
+FLAG_CN = "\U0001F1E8\U0001F1F3"  # ð¨ð³
 
-# Championnats disponibles
+# Championnats disponibles avec emojis drapeaux
 LEAGUES = {
     # Europe Top 5
-    'lg_fr': {'name': f'{FLAG_FR} Ligue 1', 'category': 'europe_top'},
-    'lg_uk': {'name': f'{FLAG_GB} Premier League', 'category': 'europe_top'},
-    'lg_es': {'name': f'{FLAG_ES} La Liga', 'category': 'europe_top'},
-    'lg_de': {'name': f'{FLAG_DE} Bundesliga', 'category': 'europe_top'},
-    'lg_it': {'name': f'{FLAG_IT} Serie A', 'category': 'europe_top'},
+    "ligue1": {"name": f"{FLAG_FR} Ligue 1", "free": True, "category": "europe_top"},
+    "premier_league": {"name": f"{FLAG_GB} Premier League", "free": True, "category": "europe_top"},
+    "laliga": {"name": f"{FLAG_ES} La Liga", "free": True, "category": "europe_top"},
+    "bundesliga": {"name": f"{FLAG_DE} Bundesliga", "free": True, "category": "europe_top"},
+    "serie_a": {"name": f"{FLAG_IT} Serie A", "free": True, "category": "europe_top"},
     # Europe Autres
-    'lg_be': {'name': f'{FLAG_BE} Jupiler Pro League', 'category': 'europe_other'},
-    'lg_nl': {'name': f'{FLAG_NL} Eredivisie', 'category': 'europe_other'},
-    'lg_pt': {'name': f'{FLAG_PT} Liga Portugal', 'category': 'europe_other'},
-    'lg_ch': {'name': f'{FLAG_CH} Super League Suisse', 'category': 'europe_other'},
-    'lg_dk': {'name': f'{FLAG_DK} Superligaen', 'category': 'europe_other'},
-    'lg_ie': {'name': f'{FLAG_IE} League of Ireland', 'category': 'europe_other'},
-    # International
-    'lg_us': {'name': f'{FLAG_US} MLS', 'category': 'international'},
-    'lg_ar': {'name': f'{FLAG_AR} Liga Argentina', 'category': 'international'},
-    'lg_mx': {'name': f'{FLAG_MX} Liga MX', 'category': 'international'},
-    'lg_ma': {'name': f'{FLAG_MA} Botola Pro', 'category': 'international'},
-    'lg_kr': {'name': f'{FLAG_KR} K-League', 'category': 'international'},
-    # Competitions
-    'lg_ucl': {'name': f'{EMOJI_TROPHY} Ligue des Champions', 'category': 'competitions'},
-    'lg_uel': {'name': f'{EMOJI_STAR} Ligue Europa', 'category': 'competitions'},
-    'lg_uecl': {'name': f'{EMOJI_SOCCER} Conference League', 'category': 'competitions'},
+    "liga_portugal": {"name": f"{FLAG_PT} Liga Portugal", "free": False, "category": "europe_other"},
+    "eredivisie": {"name": f"{FLAG_NL} Eredivisie", "free": False, "category": "europe_other"},
+    "pro_league": {"name": f"{FLAG_BE} Pro League", "free": False, "category": "europe_other"},
+    "super_lig": {"name": f"{FLAG_TR} Super Lig", "free": False, "category": "europe_other"},
+    # Ameriques
+    "brasileirao": {"name": f"{FLAG_BR} Brasileirao", "free": False, "category": "americas"},
+    "liga_argentina": {"name": f"{FLAG_AR} Liga Argentina", "free": False, "category": "americas"},
+    "liga_mx": {"name": f"{FLAG_MX} Liga MX", "free": False, "category": "americas"},
+    "mls": {"name": f"{FLAG_US} MLS", "free": False, "category": "americas"},
+    # Afrique & Asie
+    "saudi_pro": {"name": f"{FLAG_SA} Saudi Pro League", "free": False, "category": "africa_asia"},
+    "j_league": {"name": f"{FLAG_JP} J-League", "free": False, "category": "africa_asia"},
+    "chinese_super": {"name": f"{FLAG_CN} Chinese Super League", "free": False, "category": "africa_asia"},
 }
 
-# Categories de championnats
-CATEGORIES = {
-    'europe_top': {'name': f'{EMOJI_TROPHY} Europe Top 5', 'callback': 'cat_europe_top'},
-    'europe_other': {'name': f'{FLAG_EU} Europe Autres', 'callback': 'cat_europe_other'},
-    'international': {'name': f'{FLAG_WORLD} International', 'callback': 'cat_international'},
-    'competitions': {'name': f'{EMOJI_STAR} Competitions', 'callback': 'cat_competitions'},
-}
+# Cache utilisateurs en memoire
+users_cache = {}
 
-# Variable globale pour le client Google Sheets
-gs_client = None
+# Variable globale pour Google Sheets
+sheets_client = None
+worksheet = None
+
+def debug_google_credentials():
+    """Debug la configuration des credentials Google"""
+    logger.info("=" * 60)
+    logger.info("DEBUG GOOGLE CREDENTIALS")
+    logger.info("=" * 60)
+    
+    creds_env = os.environ.get('GOOGLE_CREDENTIALS', '')
+    logger.info(f"GOOGLE_CREDENTIALS env var present: {bool(creds_env)}")
+    logger.info(f"GOOGLE_CREDENTIALS length: {len(creds_env)}")
+    
+    if creds_env:
+        # Afficher les premiers caracteres pour debug
+        logger.info(f"GOOGLE_CREDENTIALS starts with: {creds_env[:100]}...")
+        logger.info(f"GOOGLE_CREDENTIALS ends with: ...{creds_env[-50:]}")
+        
+        # Tenter de parser le JSON
+        try:
+            creds_data = json.loads(creds_env)
+            logger.info("JSON parsing: SUCCESS")
+            logger.info(f"Keys in credentials: {list(creds_data.keys())}")
+            if 'client_email' in creds_data:
+                logger.info(f"Service account email: {creds_data['client_email']}")
+            if 'project_id' in creds_data:
+                logger.info(f"Project ID: {creds_data['project_id']}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing: FAILED - {e}")
+            # Essayer de nettoyer le JSON
+            logger.info("Attempting to clean JSON...")
+            try:
+                # Remplacer les newlines echappees
+                cleaned = creds_env.replace('\\n', '\n')
+                creds_data = json.loads(cleaned)
+                logger.info("Cleaned JSON parsing: SUCCESS")
+            except Exception as e2:
+                logger.error(f"Cleaned JSON parsing: FAILED - {e2}")
+    else:
+        logger.warning("GOOGLE_CREDENTIALS is empty or not set!")
+    
+    logger.info(f"GOOGLE_SHEET_ID: {GOOGLE_SHEET_ID}")
+    logger.info("=" * 60)
 
 def init_google_sheets():
-    """Initialise le client Google Sheets avec les credentials."""
-    global gs_client
+    """Initialise la connexion Google Sheets avec logs detailles"""
+    global sheets_client, worksheet
+    
+    logger.info("=" * 60)
+    logger.info("INITIALIZING GOOGLE SHEETS CONNECTION")
+    logger.info("=" * 60)
+    
+    # Debug credentials first
+    debug_google_credentials()
     
     try:
-        creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS', '')
+        
         if not creds_json:
-            logger.error("GOOGLE_CREDENTIALS non defini dans les variables d'environnement")
-            return None
+            logger.error("GOOGLE_CREDENTIALS environment variable is not set!")
+            logger.error("Please set GOOGLE_CREDENTIALS with the service account JSON")
+            return False
         
-        logger.info(f"GOOGLE_CREDENTIALS trouve, longueur: {len(creds_json)}")
-        
-        # Parser le JSON
+        logger.info("Step 1: Parsing GOOGLE_CREDENTIALS JSON...")
         try:
             creds_data = json.loads(creds_json)
-            logger.info(f"JSON parse avec succes, type: {creds_data.get('type', 'inconnu')}")
+            logger.info(f"Step 1: SUCCESS - Found {len(creds_data)} keys")
         except json.JSONDecodeError as e:
-            logger.error(f"Erreur parsing JSON credentials: {e}")
-            return None
+            logger.error(f"Step 1: FAILED - JSON decode error: {e}")
+            # Tentative de nettoyage
+            logger.info("Attempting to clean the JSON string...")
+            creds_json_cleaned = creds_json.replace('\\n', '\n')
+            try:
+                creds_data = json.loads(creds_json_cleaned)
+                logger.info("Step 1b: SUCCESS after cleaning")
+            except Exception as e2:
+                logger.error(f"Step 1b: FAILED even after cleaning: {e2}")
+                return False
         
-        # Creer les credentials
+        logger.info("Step 2: Creating Google credentials object...")
         scopes = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
         ]
-        
         credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
-        gs_client = gspread.authorize(credentials)
+        logger.info(f"Step 2: SUCCESS - Service account: {credentials.service_account_email}")
         
-        logger.info("Client Google Sheets initialise avec succes")
-        return gs_client
+        logger.info("Step 3: Authorizing gspread client...")
+        sheets_client = gspread.authorize(credentials)
+        logger.info("Step 3: SUCCESS - gspread client authorized")
         
+        logger.info(f"Step 4: Opening spreadsheet with ID: {GOOGLE_SHEET_ID}")
+        spreadsheet = sheets_client.open_by_key(GOOGLE_SHEET_ID)
+        logger.info(f"Step 4: SUCCESS - Opened spreadsheet: {spreadsheet.title}")
+        
+        logger.info("Step 5: Getting first worksheet...")
+        worksheet = spreadsheet.sheet1
+        logger.info(f"Step 5: SUCCESS - Worksheet: {worksheet.title}")
+        
+        # Verifier les colonnes
+        logger.info("Step 6: Checking worksheet structure...")
+        headers = worksheet.row_values(1)
+        logger.info(f"Step 6: Headers found: {headers}")
+        
+        expected_headers = ['user_id', 'username', 'selected_leagues', 'is_premium']
+        missing = [h for h in expected_headers if h not in headers]
+        if missing:
+            logger.warning(f"Missing expected headers: {missing}")
+            # Creer les headers si la sheet est vide
+            if not headers or headers == ['']:
+                logger.info("Creating headers in empty sheet...")
+                worksheet.update('A1:D1', [expected_headers])
+                logger.info("Headers created successfully")
+        
+        # Test de lecture
+        logger.info("Step 7: Testing read operation...")
+        all_values = worksheet.get_all_values()
+        logger.info(f"Step 7: SUCCESS - Found {len(all_values)} rows (including header)")
+        
+        logger.info("=" * 60)
+        logger.info("GOOGLE SHEETS INITIALIZATION COMPLETE")
+        logger.info("=" * 60)
+        return True
+        
+    except gspread.exceptions.SpreadsheetNotFound:
+        logger.error(f"Spreadsheet not found with ID: {GOOGLE_SHEET_ID}")
+        logger.error("Make sure the service account has access to this spreadsheet")
+        logger.error(f"Service account email to share with: footbrief-bot@footbrief-bot-461615.iam.gserviceaccount.com")
+        return False
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Google Sheets API Error: {e}")
+        logger.error(f"Response: {e.response.text if hasattr(e, 'response') else 'N/A'}")
+        return False
     except Exception as e:
-        logger.error(f"Erreur initialisation Google Sheets: {e}")
-        return None
+        logger.error(f"Failed to initialize Google Sheets: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
 
-def update_user_preferences(user_id: int, username: str, selected_league: str):
-    """Met a jour les preferences utilisateur dans Google Sheets."""
-    global gs_client
+def save_user_to_sheets(user_id: int, username: str, leagues: list, is_premium: bool = False):
+    """Sauvegarde un utilisateur dans Google Sheets avec logs detailles"""
+    global worksheet
+    
+    logger.info(f"[SAVE_USER] Starting save for user {user_id} ({username})")
+    logger.info(f"[SAVE_USER] Leagues: {leagues}, Premium: {is_premium}")
+    
+    if worksheet is None:
+        logger.error("[SAVE_USER] Worksheet is None! Attempting to reinitialize...")
+        if not init_google_sheets():
+            logger.error("[SAVE_USER] Reinitialization failed, saving to cache only")
+            users_cache[user_id] = {
+                'username': username,
+                'leagues': leagues,
+                'is_premium': is_premium
+            }
+            return False
     
     try:
-        if not gs_client:
-            logger.info("Client GS non initialise, tentative d'initialisation...")
-            init_google_sheets()
+        logger.info("[SAVE_USER] Step 1: Reading all values from sheet...")
+        all_values = worksheet.get_all_values()
+        logger.info(f"[SAVE_USER] Found {len(all_values)} rows")
         
-        if not gs_client:
-            logger.error("Impossible d'initialiser Google Sheets")
-            return False
+        # Chercher si l'utilisateur existe deja
+        user_row = None
+        for idx, row in enumerate(all_values[1:], start=2):  # Skip header
+            if row and row[0] == str(user_id):
+                user_row = idx
+                logger.info(f"[SAVE_USER] User found at row {user_row}")
+                break
         
-        # Ouvrir le spreadsheet
-        spreadsheet = gs_client.open_by_key(GOOGLE_SHEET_ID)
-        logger.info(f"Spreadsheet ouvert: {spreadsheet.title}")
+        leagues_str = ','.join(leagues)
+        premium_str = 'true' if is_premium else 'false'
+        new_data = [str(user_id), username or '', leagues_str, premium_str]
+        logger.info(f"[SAVE_USER] Data to save: {new_data}")
         
-        # Chercher ou creer la feuille "users"
-        try:
-            worksheet = spreadsheet.worksheet("users")
-            logger.info("Feuille 'users' trouvee")
-        except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="users", rows=1000, cols=10)
-            worksheet.update('A1:E1', [['user_id', 'username', 'selected_league', 'league_name', 'updated_at']])
-            logger.info("Feuille 'users' creee")
+        if user_row:
+            logger.info(f"[SAVE_USER] Step 2: Updating existing row {user_row}...")
+            worksheet.update(f'A{user_row}:D{user_row}', [new_data])
+            logger.info(f"[SAVE_USER] SUCCESS - Updated row {user_row}")
+        else:
+            logger.info("[SAVE_USER] Step 2: Appending new row...")
+            worksheet.append_row(new_data)
+            logger.info("[SAVE_USER] SUCCESS - New row appended")
         
-        # Nom de la ligue
-        league_info = LEAGUES.get(selected_league, {})
-        league_name = league_info.get('name', selected_league)
-        
-        # Chercher l'utilisateur existant
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        try:
-            cell = worksheet.find(str(user_id))
-            row = cell.row
-            worksheet.update(f'A{row}:E{row}', [[str(user_id), username or '', selected_league, league_name, timestamp]])
-            logger.info(f"Utilisateur {user_id} mis a jour: {selected_league}")
-        except gspread.CellNotFound:
-            next_row = len(worksheet.get_all_values()) + 1
-            worksheet.update(f'A{next_row}:E{next_row}', [[str(user_id), username or '', selected_league, league_name, timestamp]])
-            logger.info(f"Nouvel utilisateur {user_id} ajoute: {selected_league}")
+        # Mettre a jour le cache aussi
+        users_cache[user_id] = {
+            'username': username,
+            'leagues': leagues,
+            'is_premium': is_premium
+        }
+        logger.info("[SAVE_USER] Cache updated")
         
         return True
         
+    except gspread.exceptions.APIError as e:
+        logger.error(f"[SAVE_USER] API Error: {e}")
+        logger.error(f"[SAVE_USER] Response: {e.response.text if hasattr(e, 'response') else 'N/A'}")
+        return False
     except Exception as e:
-        logger.error(f"Erreur mise a jour Google Sheets: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"[SAVE_USER] Error saving user: {e}")
+        logger.error(f"[SAVE_USER] Traceback: {traceback.format_exc()}")
         return False
 
-# Variable globale pour l'application Telegram
-telegram_app = None
+def load_user_from_sheets(user_id: int):
+    """Charge un utilisateur depuis Google Sheets"""
+    global worksheet
+    
+    # Verifier le cache d'abord
+    if user_id in users_cache:
+        logger.info(f"[LOAD_USER] User {user_id} found in cache")
+        return users_cache[user_id]
+    
+    if worksheet is None:
+        logger.warning("[LOAD_USER] Worksheet not initialized")
+        return None
+    
+    try:
+        logger.info(f"[LOAD_USER] Searching for user {user_id} in sheet...")
+        all_values = worksheet.get_all_values()
+        
+        for row in all_values[1:]:  # Skip header
+            if row and row[0] == str(user_id):
+                user_data = {
+                    'username': row[1] if len(row) > 1 else '',
+                    'leagues': row[2].split(',') if len(row) > 2 and row[2] else [],
+                    'is_premium': row[3].lower() == 'true' if len(row) > 3 else False
+                }
+                users_cache[user_id] = user_data
+                logger.info(f"[LOAD_USER] User {user_id} loaded from sheet: {user_data}")
+                return user_data
+        
+        logger.info(f"[LOAD_USER] User {user_id} not found in sheet")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[LOAD_USER] Error loading user: {e}")
+        return None
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pour la commande /start."""
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /start"""
     user = update.effective_user
-    logger.info(f"Commande /start de {user.id} ({user.username})")
+    logger.info(f"[START] User {user.id} ({user.username}) started the bot")
     
-    welcome_text = f"""<b>{EMOJI_SOCCER} Bienvenue sur FootBrief !</b>
-
-Bonjour <b>{user.first_name}</b> !
-
-Je suis ton assistant pour les resumes de matchs de football.
-
-{EMOJI_CHECK} <b>Comment ca marche :</b>
-1. Choisis ton championnat prefere
-2. Recois des resumes des matchs
-
-{EMOJI_STAR} Utilise /ligues pour selectionner ton championnat"""
-
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode="HTML"
-    )
-
-async def ligues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pour la commande /ligues - affiche les categories."""
-    logger.info(f"Commande /ligues de {update.effective_user.id}")
+    # Charger l'utilisateur existant ou creer nouveau
+    user_data = load_user_from_sheets(user.id)
     
-    keyboard = []
-    for cat_id, cat_info in CATEGORIES.items():
-        keyboard.append([InlineKeyboardButton(cat_info['name'], callback_data=cat_info['callback'])])
+    keyboard = [
+        [InlineKeyboardButton(f"{EMOJI_TROPHY} Choisir mon championnat", callback_data="select_league")],
+        [InlineKeyboardButton(f"{EMOJI_STAR} Premium - Tous les championnats", callback_data="premium_info")],
+    ]
+    
+    if user_data and user_data.get('leagues'):
+        keyboard.append([InlineKeyboardButton(f"{EMOJI_SOCCER} Mes championnats", callback_data="my_leagues")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    text = f"""<b>{EMOJI_SOCCER} Choisis une categorie</b>
+    welcome_text = f"""
+{EMOJI_SOCCER} *Bienvenue sur {SERVICE_NAME}!* {EMOJI_SOCCER}
 
-Selectionne la categorie de championnat qui t'interesse :"""
+Je suis votre assistant pour ne rien manquer du football!
 
+{EMOJI_TROPHY} *Gratuit*: 1 championnat au choix parmi les Top 5 europeens
+{EMOJI_STAR} *Premium*: Tous les championnats + alertes temps reel
+
+Selectionnez une option ci-dessous:
+"""
+    
     await update.message.reply_text(
-        text,
+        welcome_text,
         reply_markup=reply_markup,
-        parse_mode="HTML"
+        parse_mode='Markdown'
     )
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pour les boutons inline."""
+async def select_league_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche les categories de championnats"""
     query = update.callback_query
     await query.answer()
     
-    data = query.data
+    keyboard = [
+        [InlineKeyboardButton(f"{EMOJI_TROPHY} Europe Top 5 (Gratuit)", callback_data="cat_europe_top")],
+        [InlineKeyboardButton(f"{FLAG_PT} Europe Autres (Premium)", callback_data="cat_europe_other")],
+        [InlineKeyboardButton(f"{FLAG_BR} Ameriques (Premium)", callback_data="cat_americas")],
+        [InlineKeyboardButton(f"{FLAG_SA} Afrique & Asie (Premium)", callback_data="cat_africa_asia")],
+        [InlineKeyboardButton("< Retour", callback_data="back_main")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"{EMOJI_PIN} *Selectionnez une region:*\n\nLes championnats Europe Top 5 sont gratuits!",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_category_leagues(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche les championnats d'une categorie"""
+    query = update.callback_query
+    await query.answer()
+    
     user = update.effective_user
+    category = query.data.replace("cat_", "")
     
-    logger.info(f"Callback '{data}' de {user.id} ({user.username})")
+    logger.info(f"[CATEGORY] User {user.id} viewing category: {category}")
     
-    # Gestion des categories
-    if data.startswith('cat_'):
-        category = data.replace('cat_', '')
-        await show_leagues_for_category(query, category)
-        return
+    # Verifier si premium pour les categories payantes
+    user_data = load_user_from_sheets(user.id)
+    is_premium = user_data.get('is_premium', False) if user_data else False
     
-    # Gestion de la selection d'une ligue
-    if data.startswith('lg_'):
-        await handle_league_selection(query, data, user)
-        return
-    
-    # Retour au menu
-    if data == 'back_categories':
-        await show_categories_menu(query)
-        return
-
-async def show_leagues_for_category(query, category: str):
-    """Affiche les ligues d'une categorie."""
     keyboard = []
+    for league_id, league_info in LEAGUES.items():
+        if league_info['category'] == category:
+            # Si pas premium et ligue payante, montrer comme verrouillee
+            if not is_premium and not league_info['free']:
+                btn_text = f"{league_info['name']} {EMOJI_STAR}"
+                callback = "premium_required"
+            else:
+                btn_text = league_info['name']
+                callback = f"toggle_{league_id}"
+            
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback)])
     
-    for lg_id, lg_info in LEAGUES.items():
-        if lg_info['category'] == category:
-            keyboard.append([InlineKeyboardButton(lg_info['name'], callback_data=lg_id)])
-    
-    keyboard.append([InlineKeyboardButton(f"{EMOJI_PIN} Retour", callback_data='back_categories')])
-    
+    keyboard.append([InlineKeyboardButton("< Retour", callback_data="select_league")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    cat_name = CATEGORIES.get(category, {}).get('name', 'Championnats')
+    category_names = {
+        'europe_top': f'{EMOJI_TROPHY} Europe Top 5',
+        'europe_other': f'{FLAG_PT} Europe Autres',
+        'americas': f'{FLAG_BR} Ameriques',
+        'africa_asia': f'{FLAG_SA} Afrique & Asie'
+    }
     
-    text = f"""<b>{cat_name}</b>
-
-Selectionne ton championnat :"""
-
     await query.edit_message_text(
-        text,
+        f"*{category_names.get(category, 'Championnats')}*\n\nSelectionnez un championnat:",
         reply_markup=reply_markup,
-        parse_mode="HTML"
+        parse_mode='Markdown'
     )
 
-async def show_categories_menu(query):
-    """Affiche le menu des categories."""
-    keyboard = []
-    for cat_id, cat_info in CATEGORIES.items():
-        keyboard.append([InlineKeyboardButton(cat_info['name'], callback_data=cat_info['callback'])])
+async def toggle_league(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Active/desactive un championnat pour l'utilisateur"""
+    query = update.callback_query
+    await query.answer()
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    user = update.effective_user
+    league_id = query.data.replace("toggle_", "")
     
-    text = f"""<b>{EMOJI_SOCCER} Choisis une categorie</b>
-
-Selectionne la categorie de championnat qui t'interesse :"""
-
-    await query.edit_message_text(
-        text,
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
-
-async def handle_league_selection(query, league_id: str, user):
-    """Gere la selection d'une ligue."""
-    league_info = LEAGUES.get(league_id, {})
-    league_name = league_info.get('name', league_id)
+    logger.info(f"[TOGGLE] User {user.id} toggling league: {league_id}")
     
-    logger.info(f"Selection ligue {league_id} ({league_name}) par {user.id}")
+    # Charger donnees utilisateur
+    user_data = load_user_from_sheets(user.id)
+    if user_data is None:
+        user_data = {'username': user.username, 'leagues': [], 'is_premium': False}
     
-    # Mettre a jour Google Sheets
-    success = update_user_preferences(
-        user_id=user.id,
-        username=user.username or user.first_name,
-        selected_league=league_id
-    )
+    current_leagues = user_data.get('leagues', [])
+    is_premium = user_data.get('is_premium', False)
     
-    if success:
-        text = f"""<b>{EMOJI_CHECK} Championnat enregistre !</b>
-
-Tu as selectionne : <b>{league_name}</b>
-
-{EMOJI_STAR} Tu recevras maintenant les resumes des matchs de ce championnat.
-
-{EMOJI_PIN} Pour changer, utilise /ligues"""
-        
-        logger.info(f"Preference sauvegardee avec succes pour {user.id}")
+    league_info = LEAGUES.get(league_id)
+    if not league_info:
+        await query.edit_message_text("Championnat non trouve.")
+        return
+    
+    # Verifier les droits
+    if not is_premium and not league_info['free']:
+        await query.edit_message_text(
+            f"{EMOJI_STAR} *Ce championnat necessite Premium*\n\n"
+            f"Passez a Premium pour acceder a tous les championnats!",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Toggle la ligue
+    if league_id in current_leagues:
+        current_leagues.remove(league_id)
+        action = "retire"
     else:
-        text = f"""<b>{EMOJI_CHECK} Championnat selectionne</b>
+        # Utilisateur gratuit: max 1 ligue
+        if not is_premium and len(current_leagues) >= 1:
+            # Remplacer la ligue existante
+            current_leagues = [league_id]
+            action = "remplace par"
+        else:
+            current_leagues.append(league_id)
+            action = "ajoute"
+    
+    # Sauvegarder
+    logger.info(f"[TOGGLE] Saving leagues for user {user.id}: {current_leagues}")
+    save_success = save_user_to_sheets(user.id, user.username, current_leagues, is_premium)
+    
+    if save_success:
+        status_msg = f"{EMOJI_CHECK} {league_info['name']} {action}!"
+    else:
+        status_msg = f"{EMOJI_CHECK} {league_info['name']} {action}! (sauvegarde locale uniquement)"
+    
+    keyboard = [
+        [InlineKeyboardButton(f"{EMOJI_SOCCER} Voir mes championnats", callback_data="my_leagues")],
+        [InlineKeyboardButton("< Retour aux categories", callback_data="select_league")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(status_msg, reply_markup=reply_markup)
 
-Tu as choisi : <b>{league_name}</b>
+async def my_leagues(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche les championnats de l'utilisateur"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    user_data = load_user_from_sheets(user.id)
+    
+    if not user_data or not user_data.get('leagues'):
+        await query.edit_message_text(
+            f"{EMOJI_SOCCER} Vous n'avez pas encore selectionne de championnat.\n\n"
+            f"Utilisez /start pour commencer!",
+            parse_mode='Markdown'
+        )
+        return
+    
+    leagues_list = []
+    for league_id in user_data['leagues']:
+        if league_id in LEAGUES:
+            leagues_list.append(f"  {EMOJI_CHECK} {LEAGUES[league_id]['name']}")
+    
+    is_premium = user_data.get('is_premium', False)
+    status = f"{EMOJI_STAR} Premium" if is_premium else "Gratuit"
+    
+    text = f"""
+{EMOJI_SOCCER} *Mes championnats {SERVICE_SHORT}*
 
-{EMOJI_PIN} Note : La sauvegarde n'a pas fonctionne, mais tu peux continuer.
-Utilise /ligues pour reessayer."""
-        
-        logger.warning(f"Echec sauvegarde pour {user.id}")
+{chr(10).join(leagues_list)}
+
+Statut: {status}
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("Modifier mes championnats", callback_data="select_league")],
+        [InlineKeyboardButton("< Retour", callback_data="back_main")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche les infos Premium"""
+    query = update.callback_query
+    await query.answer()
+    
+    text = f"""
+{EMOJI_STAR} *{SERVICE_NAME} Premium* {EMOJI_STAR}
+
+Debloquez tous les avantages:
+
+{EMOJI_CHECK} *15+ championnats* - Europe, Ameriques, Afrique, Asie
+{EMOJI_CHECK} *Alertes temps reel* - Buts, cartons, resultats
+{EMOJI_CHECK} *Statistiques avancees* - xG, possession, tirs
+{EMOJI_CHECK} *Historique complet* - Acces a tous les resumes
+
+Prix: *4.99 EUR/mois*
+
+Contactez @votre_support pour souscrire!
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("< Retour", callback_data="back_main")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def premium_required(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Message quand Premium est requis"""
+    query = update.callback_query
+    await query.answer(f"{EMOJI_STAR} Ce championnat necessite Premium!", show_alert=True)
+
+async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Retour au menu principal"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    user_data = load_user_from_sheets(user.id)
+    
+    keyboard = [
+        [InlineKeyboardButton(f"{EMOJI_TROPHY} Choisir mon championnat", callback_data="select_league")],
+        [InlineKeyboardButton(f"{EMOJI_STAR} Premium - Tous les championnats", callback_data="premium_info")],
+    ]
+    
+    if user_data and user_data.get('leagues'):
+        keyboard.append([InlineKeyboardButton(f"{EMOJI_SOCCER} Mes championnats", callback_data="my_leagues")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = f"""
+{EMOJI_SOCCER} *Bienvenue sur {SERVICE_NAME}!* {EMOJI_SOCCER}
+
+Je suis votre assistant pour ne rien manquer du football!
+
+{EMOJI_TROPHY} *Gratuit*: 1 championnat au choix parmi les Top 5 europeens
+{EMOJI_STAR} *Premium*: Tous les championnats + alertes temps reel
+
+Selectionnez une option ci-dessous:
+"""
     
     await query.edit_message_text(
-        text,
-        parse_mode="HTML"
+        welcome_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pour la commande /help."""
-    help_text = f"""<b>{EMOJI_SOCCER} Aide FootBrief</b>
+    """Commande /help"""
+    help_text = f"""
+{EMOJI_SOCCER} *Aide {SERVICE_NAME}* {EMOJI_SOCCER}
 
-<b>Commandes disponibles :</b>
+*Commandes disponibles:*
 /start - Demarrer le bot
-/ligues - Choisir ton championnat
 /help - Afficher cette aide
+/status - Voir vos championnats
 
-<b>Championnats disponibles :</b>
-{EMOJI_TROPHY} Europe Top 5 (Ligue 1, Premier League, etc.)
-{FLAG_EU} Europe Autres
-{FLAG_WORLD} International
-{EMOJI_STAR} Competitions UEFA
+*Comment ca marche:*
+1. Selectionnez un championnat gratuit ou passez Premium
+2. Recevez les resumes de matchs automatiquement
+3. Personnalisez vos alertes
 
-<b>Contact :</b>
-Pour toute question, contacte l'administrateur."""
+*Support:* @votre_support
+"""
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
-    await update.message.reply_text(help_text, parse_mode="HTML")
-
-# Routes HTTP
-async def health_check(request: Request):
-    """Endpoint de health check."""
-    return JSONResponse({
-        "status": "ok",
-        "bot": "FootBrief",
-        "timestamp": datetime.now().isoformat()
-    })
-
-async def webhook_handler(request: Request):
-    """Handler pour les webhooks Telegram."""
-    global telegram_app
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /status"""
+    user = update.effective_user
+    user_data = load_user_from_sheets(user.id)
     
-    try:
-        data = await request.json()
-        logger.info(f"Webhook recu: {json.dumps(data)[:500]}")
-        
-        if telegram_app:
-            update = Update.de_json(data, telegram_app.bot)
-            await telegram_app.process_update(update)
-            return JSONResponse({"status": "ok"})
-        else:
-            logger.error("telegram_app non initialise")
-            return JSONResponse({"status": "error", "message": "Bot not ready"}, status_code=503)
-            
-    except Exception as e:
-        logger.error(f"Erreur webhook: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+    if not user_data:
+        await update.message.reply_text(
+            f"Vous n'etes pas encore inscrit. Utilisez /start pour commencer!"
+        )
+        return
+    
+    leagues_text = "Aucun" if not user_data.get('leagues') else ", ".join(
+        LEAGUES[l]['name'] for l in user_data['leagues'] if l in LEAGUES
+    )
+    status = "Premium" if user_data.get('is_premium') else "Gratuit"
+    
+    await update.message.reply_text(
+        f"{EMOJI_SOCCER} *Votre profil {SERVICE_SHORT}*\n\n"
+        f"Championnats: {leagues_text}\n"
+        f"Statut: {status}",
+        parse_mode='Markdown'
+    )
+
+# Application Telegram
+telegram_app = None
 
 @asynccontextmanager
 async def lifespan(app):
-    """Gestion du cycle de vie de l'application."""
+    """Gestion du cycle de vie de l'application"""
     global telegram_app
     
-    logger.info("Demarrage de l'application...")
+    logger.info("=" * 60)
+    logger.info(f"STARTING {SERVICE_NAME} BOT")
+    logger.info("=" * 60)
     
-    # Initialiser Google Sheets
-    init_google_sheets()
+    # Initialiser Google Sheets au demarrage
+    sheets_ok = init_google_sheets()
+    if sheets_ok:
+        logger.info("Google Sheets: CONNECTED")
+    else:
+        logger.warning("Google Sheets: NOT CONNECTED - using cache only")
     
-    # Creer l'application Telegram
+    # Initialiser le bot Telegram
+    logger.info("Initializing Telegram bot...")
     telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     # Ajouter les handlers
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(CommandHandler("ligues", ligues_command))
+    telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("help", help_command))
-    telegram_app.add_handler(CallbackQueryHandler(button_callback))
+    telegram_app.add_handler(CommandHandler("status", status_command))
+    telegram_app.add_handler(CallbackQueryHandler(select_league_callback, pattern="^select_league$"))
+    telegram_app.add_handler(CallbackQueryHandler(show_category_leagues, pattern="^cat_"))
+    telegram_app.add_handler(CallbackQueryHandler(toggle_league, pattern="^toggle_"))
+    telegram_app.add_handler(CallbackQueryHandler(my_leagues, pattern="^my_leagues$"))
+    telegram_app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
+    telegram_app.add_handler(CallbackQueryHandler(premium_required, pattern="^premium_required$"))
+    telegram_app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
     
-    # Initialiser l'application Telegram
     await telegram_app.initialize()
-    await telegram_app.start()
     
     # Configurer le webhook
-    webhook_url = os.environ.get('WEBHOOK_URL')
+    webhook_url = os.environ.get('WEBHOOK_URL', '')
     if webhook_url:
         full_webhook_url = f"{webhook_url}{WEBHOOK_PATH}"
-        try:
-            await telegram_app.bot.set_webhook(url=full_webhook_url)
-            logger.info(f"Webhook configure: {full_webhook_url}")
-        except Exception as e:
-            logger.error(f"Erreur configuration webhook: {e}")
+        logger.info(f"Setting webhook to: {full_webhook_url}")
+        await telegram_app.bot.set_webhook(url=full_webhook_url)
+        logger.info("Webhook configured successfully")
     else:
-        logger.warning("WEBHOOK_URL non defini")
+        logger.warning("WEBHOOK_URL not set, webhook not configured")
     
-    logger.info(f"Bot demarre sur le port {PORT}")
+    logger.info(f"{SERVICE_NAME} bot started successfully!")
     
     yield
     
     # Cleanup
-    logger.info("Arret de l'application...")
+    logger.info("Shutting down...")
     if telegram_app:
-        await telegram_app.stop()
         await telegram_app.shutdown()
+
+async def webhook_handler(request: Request):
+    """Handler pour les webhooks Telegram"""
+    global telegram_app
+    
+    try:
+        data = await request.json()
+        logger.debug(f"Webhook received: {json.dumps(data, indent=2)}")
+        
+        update = Update.de_json(data, telegram_app.bot)
+        await telegram_app.process_update(update)
+        
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        logger.error(traceback.format_exc())
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+async def health_check(request: Request):
+    """Health check endpoint"""
+    global worksheet
+    
+    sheets_status = "connected" if worksheet is not None else "disconnected"
+    
+    return JSONResponse({
+        "status": "healthy",
+        "service": SERVICE_NAME,
+        "google_sheets": sheets_status,
+        "timestamp": datetime.now().isoformat()
+    })
+
+async def homepage(request: Request):
+    """Page d'accueil"""
+    return PlainTextResponse(f"{SERVICE_NAME} Telegram Bot is running!")
 
 # Configuration des routes
 routes = [
-    Route("/", health_check, methods=["GET"]),
-    Route("/health", health_check, methods=["GET"]),
+    Route("/", homepage),
+    Route("/health", health_check),
     Route(WEBHOOK_PATH, webhook_handler, methods=["POST"]),
 ]
 
-# Creation de l'application Starlette
+# Application Starlette
 app = Starlette(
-    debug=False,
     routes=routes,
     lifespan=lifespan
 )
 
 if __name__ == "__main__":
     import uvicorn
+    logger.info(f"Starting {SERVICE_NAME} server on port {PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
