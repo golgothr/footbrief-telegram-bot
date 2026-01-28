@@ -27,11 +27,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Variables d'environnement
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TEABLE_TOKEN = os.environ.get('TEABLE_TOKEN')
 TEABLE_API_URL = os.environ.get('TEABLE_API_URL') 
 PORT = int(os.environ.get('PORT', 8000))
+
+# --- IDS DES CHAMPS TEABLE (Extraits de tes notes) ---
+FLD_USER_ID = "fldOJAk8jnO1KRRapu6"
+FLD_USERNAME = "fldUWEWNqO4WI69RyvG"
+FLD_LEAGUES = "fldHthW8Lgy1xzDHnca"
+FLD_PREMIUM = "fldfnTldzqcCZsbmUCd"
 
 # --- DONNÉES DES LIGUES ---
 LEAGUES = {
@@ -55,7 +60,7 @@ LEAGUES = {
 
 telegram_app = None
 
-# --- LOGIQUE TEABLE ---
+# --- LOGIQUE TEABLE (MISE À JOUR AVEC FIELD_ID) ---
 
 async def get_teable_headers():
     return {
@@ -68,11 +73,13 @@ async def update_user_preferences(user_id: int, username: str, selected_leagues:
     leagues_json = json.dumps(selected_leagues)
     async with httpx.AsyncClient() as client:
         try:
-            # CORRECTION : Recherche par 'field' (nom de colonne)
-            filter_params = {"conjunction":"and","filterSet":[{"field":"user_id","operator":"is","value":user_id}]}
+            # OBLIGATOIRE : Utiliser le fieldId réel pour le filtre
+            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value":user_id}]}
             search_url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
+            
             resp = await client.get(search_url, headers=headers)
-            records = resp.json().get("records", [])
+            data = resp.json()
+            records = data.get("records", [])
 
             fields = {
                 "user_id": user_id,
@@ -82,12 +89,14 @@ async def update_user_preferences(user_id: int, username: str, selected_leagues:
             }
 
             if records:
+                # PATCH : nécessite le recordId dans l'URL
                 record_id = records[0]["id"]
-                await client.patch(f"{TEABLE_API_URL}/record/{record_id}?fieldKeyType=name", 
-                                   headers=headers, json={"fields": fields})
+                url = f"{TEABLE_API_URL}/record/{record_id}"
+                await client.patch(url, headers=headers, json={"fieldKeyType": "name", "record": {"fields": fields}})
             else:
-                await client.post(f"{TEABLE_API_URL}/record?fieldKeyType=name", 
-                                  headers=headers, json={"records": [{"fields": fields}]})
+                # POST : création d'un nouveau record
+                url = f"{TEABLE_API_URL}/record"
+                await client.post(url, headers=headers, json={"fieldKeyType": "name", "records": [{"fields": fields}]})
             return True
         except Exception as e:
             logger.error(f"Erreur Teable Sync: {e}")
@@ -97,7 +106,7 @@ async def get_user_preferences(user_id: int) -> dict:
     headers = await get_teable_headers()
     async with httpx.AsyncClient() as client:
         try:
-            filter_params = {"conjunction":"and","filterSet":[{"field":"user_id","operator":"is","value":user_id}]}
+            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value":user_id}]}
             url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
             resp = await client.get(url, headers=headers)
             records = resp.json().get("records", [])
@@ -117,13 +126,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update_user_preferences(user.id, user.username, [], False)
     welcome_text = (
-        f"⚽ **Bienvenue sur YWFR !**\n\n"
-        f"Chaque lundi matin, je vous envoie un résumé complet de vos championnats favoris.\n\n"
-        f"🎁 **Gratuit :** 1 ligue au choix (🇫🇷 ou 🏴󠁧󠁢󠁥󠁮󠁧󠁿).\n"
-        f"⭐ **Premium :** Accès illimité aux 16 championnats.\n\n"
-        f"Commandes disponibles :\n"
-        f"/ligues - Choisir mes championnats\n"
-        f"/compte - Voir mon profil et mes choix"
+        "⚽ **Bienvenue sur YWFR !**\n\n"
+        "Chaque lundi matin, je vous envoie un résumé complet de vos championnats favoris.\n\n"
+        "🎁 **Gratuit :** 1 ligue au choix (🇫🇷 ou 🏴󠁧󠁢󠁥󠁮󠁧󠁿).\n"
+        "⭐ **Premium :** Accès illimité aux 16 championnats mondiaux.\n\n"
+        "Commandes :\n"
+        "/ligues - Choisir mes championnats\n"
+        "/compte - Mon profil"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
@@ -132,13 +141,11 @@ async def ligues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefs = await get_user_preferences(user.id)
     selected = prefs["selected_leagues"]
     is_premium = prefs["is_premium"]
-
     keyboard = []
     for lid, info in LEAGUES.items():
-        status = "✅ " if lid in selected else ("⭐ " if info["premium"] and not is_premium else "🔹 ")
-        keyboard.append([InlineKeyboardButton(f"{status}{info['name']}", callback_data=lid)])
+        st = "✅ " if lid in selected else ("⭐ " if info["premium"] and not is_premium else "🔹 ")
+        keyboard.append([InlineKeyboardButton(f"{st}{info['name']}", callback_data=lid)])
     keyboard.append([InlineKeyboardButton("💾 Valider", callback_data="validate")])
-    
     await update.message.reply_text("🏆 **Sélectionnez vos championnats :**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,7 +153,6 @@ async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefs = await get_user_preferences(user.id)
     noms = [LEAGUES[c]["name"] for c in prefs["selected_leagues"] if c in LEAGUES]
     status = "⭐ Premium" if prefs["is_premium"] else "🔹 Gratuit"
-    
     text = (
         f"👤 **Votre Compte YWFR**\n\n"
         f"📈 **Statut :** {status}\n"
@@ -158,9 +164,8 @@ async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = query.from_user
     if query.data in LEAGUES:
-        prefs = await get_user_preferences(user.id)
+        prefs = await get_user_preferences(query.from_user.id)
         selected = prefs["selected_leagues"]
         if LEAGUES[query.data]["premium"] and not prefs["is_premium"]:
             await query.answer("🏆 Abonnement Premium requis !", show_alert=True)
@@ -170,8 +175,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if query.data in selected: selected.remove(query.data)
         else: selected.append(query.data)
-        await update_user_preferences(user.id, user.username, selected, prefs["is_premium"])
-        
+        await update_user_preferences(query.from_user.id, query.from_user.username, selected, prefs["is_premium"])
         keyboard = []
         for lid, info in LEAGUES.items():
             st = "✅ " if lid in selected else ("⭐ " if info["premium"] and not prefs["is_premium"] else "🔹 ")
@@ -181,7 +185,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "validate":
         await query.edit_message_text("✅ Préférences enregistrées !")
 
-# --- SERVEUR & LIFESPAN ---
+# --- SERVEUR STARLETTE ---
 
 @asynccontextmanager
 async def lifespan(app: Starlette):
