@@ -34,7 +34,6 @@ TEABLE_API_URL = os.environ.get('TEABLE_API_URL')
 PORT = int(os.environ.get('PORT', 8000))
 
 # --- DONNÉES DES LIGUES ---
-# On utilise les codes callback_data définis précédemment
 LEAGUES = {
     "lg_fr": {"name": "🇫🇷 Ligue 1", "premium": False},
     "lg_uk": {"name": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", "premium": False},
@@ -56,7 +55,7 @@ LEAGUES = {
 
 telegram_app = None
 
-# --- LOGIQUE TEABLE (CORRIGÉE AVEC 'field') ---
+# --- LOGIQUE TEABLE ---
 
 async def get_teable_headers():
     return {
@@ -67,13 +66,11 @@ async def get_teable_headers():
 async def update_user_preferences(user_id: int, username: str, selected_leagues: list, is_premium: bool = False):
     headers = await get_teable_headers()
     leagues_json = json.dumps(selected_leagues)
-    
     async with httpx.AsyncClient() as client:
         try:
-            # CORRECTION : Utilisation de "field" au lieu de "fieldId" pour correspondre au nom de ta colonne
+            # CORRECTION : Recherche par 'field' (nom de colonne)
             filter_params = {"conjunction":"and","filterSet":[{"field":"user_id","operator":"is","value":user_id}]}
             search_url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
-            
             resp = await client.get(search_url, headers=headers)
             records = resp.json().get("records", [])
 
@@ -100,12 +97,10 @@ async def get_user_preferences(user_id: int) -> dict:
     headers = await get_teable_headers()
     async with httpx.AsyncClient() as client:
         try:
-            # CORRECTION : Utilisation de "field" ici aussi
             filter_params = {"conjunction":"and","filterSet":[{"field":"user_id","operator":"is","value":user_id}]}
             url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
             resp = await client.get(url, headers=headers)
             records = resp.json().get("records", [])
-            
             if records:
                 f = records[0]["fields"]
                 return {
@@ -120,15 +115,15 @@ async def get_user_preferences(user_id: int) -> dict:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # Enregistrement initial
     await update_user_preferences(user.id, user.username, [], False)
-    
     welcome_text = (
         f"⚽ **Bienvenue sur YWFR !**\n\n"
-        f"Recevez chaque lundi matin le résumé de vos championnats favoris.\n\n"
+        f"Chaque lundi matin, je vous envoie un résumé complet de vos championnats favoris.\n\n"
         f"🎁 **Gratuit :** 1 ligue au choix (🇫🇷 ou 🏴󠁧󠁢󠁥󠁮󠁧󠁿).\n"
-        f"⭐ **Premium :** Accès illimité aux 16 championnats mondiaux.\n\n"
-        f"Utilisez /ligues pour choisir vos championnats."
+        f"⭐ **Premium :** Accès illimité aux 16 championnats.\n\n"
+        f"Commandes disponibles :\n"
+        f"/ligues - Choisir mes championnats\n"
+        f"/compte - Voir mon profil et mes choix"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
@@ -139,59 +134,54 @@ async def ligues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_premium = prefs["is_premium"]
 
     keyboard = []
-    # On itère sur le dictionnaire LEAGUES pour créer les boutons
     for lid, info in LEAGUES.items():
         status = "✅ " if lid in selected else ("⭐ " if info["premium"] and not is_premium else "🔹 ")
         keyboard.append([InlineKeyboardButton(f"{status}{info['name']}", callback_data=lid)])
+    keyboard.append([InlineKeyboardButton("💾 Valider", callback_data="validate")])
     
-    keyboard.append([InlineKeyboardButton("💾 Valider la sélection", callback_data="validate")])
+    await update.message.reply_text("🏆 **Sélectionnez vos championnats :**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    prefs = await get_user_preferences(user.id)
+    noms = [LEAGUES[c]["name"] for c in prefs["selected_leagues"] if c in LEAGUES]
+    status = "⭐ Premium" if prefs["is_premium"] else "🔹 Gratuit"
     
-    text = "🏆 **Sélectionnez vos championnats**\n"
-    if not is_premium:
-        text += "_Mode gratuit limité à 1 choix (Ligue 1 ou Premier League)_"
-    
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    text = (
+        f"👤 **Votre Compte YWFR**\n\n"
+        f"📈 **Statut :** {status}\n"
+        f"📋 **Ligues suivies :**\n" + ("\n".join([f"- {n}" for n in noms]) if noms else "_Aucune_") +
+        f"\n\n_Utilisez /ligues pour modifier vos choix._"
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
-    data = query.data
-    
-    if data in LEAGUES:
+    if query.data in LEAGUES:
         prefs = await get_user_preferences(user.id)
-        is_premium = prefs["is_premium"]
         selected = prefs["selected_leagues"]
-
-        # Logique Freemium
-        if LEAGUES[data]["premium"] and not is_premium:
-            await query.answer("🏆 Ce championnat nécessite un abonnement Premium !", show_alert=True)
+        if LEAGUES[query.data]["premium"] and not prefs["is_premium"]:
+            await query.answer("🏆 Abonnement Premium requis !", show_alert=True)
             return
-        
-        if not is_premium and len(selected) >= 1 and data not in selected:
-            await query.answer("📍 Mode gratuit : vous ne pouvez choisir qu'un seul championnat.", show_alert=True)
+        if not prefs["is_premium"] and len(selected) >= 1 and query.data not in selected:
+            await query.answer("📍 Mode gratuit limité à 1 championnat.", show_alert=True)
             return
-
-        # Toggle selection
-        if data in selected:
-            selected.remove(data)
-        else:
-            selected.append(data)
+        if query.data in selected: selected.remove(query.data)
+        else: selected.append(query.data)
+        await update_user_preferences(user.id, user.username, selected, prefs["is_premium"])
         
-        await update_user_preferences(user.id, user.username, selected, is_premium)
-        
-        # Refresh UI
         keyboard = []
         for lid, info in LEAGUES.items():
-            status = "✅ " if lid in selected else ("⭐ " if info["premium"] and not is_premium else "🔹 ")
-            keyboard.append([InlineKeyboardButton(f"{status}{info['name']}", callback_data=lid)])
-        keyboard.append([InlineKeyboardButton("💾 Valider la sélection", callback_data="validate")])
+            st = "✅ " if lid in selected else ("⭐ " if info["premium"] and not prefs["is_premium"] else "🔹 ")
+            keyboard.append([InlineKeyboardButton(f"{st}{info['name']}", callback_data=lid)])
+        keyboard.append([InlineKeyboardButton("💾 Valider", callback_data="validate")])
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+    elif query.data == "validate":
+        await query.edit_message_text("✅ Préférences enregistrées !")
 
-    elif data == "validate":
-        await query.edit_message_text("✅ Vos préférences ont été enregistrées. Rendez-vous lundi matin !")
-
-# --- SERVEUR STARLETTE ---
+# --- SERVEUR & LIFESPAN ---
 
 @asynccontextmanager
 async def lifespan(app: Starlette):
@@ -199,14 +189,12 @@ async def lifespan(app: Starlette):
     telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("ligues", ligues_command))
+    telegram_app.add_handler(CommandHandler("compte", compte_command))
     telegram_app.add_handler(CallbackQueryHandler(button_callback))
-    
     await telegram_app.initialize()
     await telegram_app.start()
-    logger.info("Bot démarré avec succès")
     yield
     await telegram_app.stop()
-    await telegram_app.shutdown()
 
 async def webhook_handler(request: Request):
     data = await request.json()
@@ -216,7 +204,7 @@ async def webhook_handler(request: Request):
 
 app = Starlette(lifespan=lifespan, routes=[
     Route("/webhook", webhook_handler, methods=["POST"]),
-    Route("/", lambda r: PlainTextResponse("YWFR Bot is Live")),
+    Route("/", lambda r: PlainTextResponse("YWFR Bot Live")),
 ])
 
 if __name__ == "__main__":
