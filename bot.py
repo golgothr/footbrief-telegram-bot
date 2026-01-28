@@ -50,19 +50,19 @@ SERVICE_NAME = "Your Weekly Football Resume"
 SERVICE_SHORT = "YWFR"
 
 # Emojis simples
-EMOJI_SOCCER = "\u26BD"      # ⚽
-EMOJI_CHECK = "\u2705"       # ✅
-EMOJI_STAR = "\u2B50"        # ⭐
-EMOJI_TROPHY = "\U0001F3C6"  # 🏆
-EMOJI_PIN = "\U0001F4CD"     # 📍
+EMOJI_SOCCER = "\u26BD"      # â½
+EMOJI_CHECK = "\u2705"       # â
+EMOJI_STAR = "\u2B50"        # â­
+EMOJI_TROPHY = "\U0001F3C6"  # ð
+EMOJI_PIN = "\U0001F4CD"     # ð
 
 # Drapeaux pays (sequences Unicode)
-FLAG_FR = "\U0001F1EB\U0001F1F7"  # 🇫🇷
-FLAG_GB = "\U0001F1EC\U0001F1E7"  # 🇬🇧
-FLAG_ES = "\U0001F1EA\U0001F1F8"  # 🇪🇸
-FLAG_IT = "\U0001F1EE\U0001F1F9"  # 🇮🇹
-FLAG_DE = "\U0001F1E9\U0001F1EA"  # 🇩🇪
-FLAG_EU = "\U0001F1EA\U0001F1FA"  # 🇪🇺
+FLAG_FR = "\U0001F1EB\U0001F1F7"  # ð«ð·
+FLAG_GB = "\U0001F1EC\U0001F1E7"  # ð¬ð§
+FLAG_ES = "\U0001F1EA\U0001F1F8"  # ðªð¸
+FLAG_IT = "\U0001F1EE\U0001F1F9"  # ð®ð¹
+FLAG_DE = "\U0001F1E9\U0001F1EA"  # ð©ðª
+FLAG_EU = "\U0001F1EA\U0001F1FA"  # ðªðº
 
 # Championnats disponibles avec leur ID Football-Data
 LEAGUES = {
@@ -214,9 +214,23 @@ async def get_user_preferences(user_id: int) -> dict:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pour /start"""
+    """Handler pour /start - enregistre aussi l'utilisateur dans Teable"""
     user = update.effective_user
     logger.info(f"Commande /start de {user.username} (ID: {user.id})")
+    
+    # Enregistrer l'utilisateur dans Teable (cree s'il n'existe pas, ignore sinon)
+    try:
+        username = user.username or user.first_name or ""
+        await update_user_preferences(
+            user_id=user.id,
+            username=username,
+            selected_leagues=[],  # Vide par defaut
+            is_premium=False
+        )
+        logger.info(f"Utilisateur {user.id} enregistre dans Teable")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'enregistrement dans Teable: {e}")
+        # On continue meme si l'enregistrement echoue
     
     welcome_message = f"""
 {EMOJI_SOCCER} *Bienvenue sur {SERVICE_NAME}!* {EMOJI_SOCCER}
