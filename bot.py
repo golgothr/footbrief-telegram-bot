@@ -150,7 +150,7 @@ async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = "⭐ Premium" if prefs["is_premium"] else "🔹 Gratuit"
     
     text = (f"👤 **VOTRE COMPTE**\n\n**Statut :** {status}\n"
-            f"**Ligues :**\n" + ("\n".join(noms) if noms else "_Aucune_"))
+            f"**Ligues suivies :**\n" + ("\n".join(noms) if noms else "_Aucune_"))
     
     keyboard = [
         [InlineKeyboardButton("🔄 Changer de ligue", callback_data="open_ligues")],
@@ -167,15 +167,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "ignore": return
+    
     if data == "open_ligues":
         await query.message.delete()
         prefs = await get_user_preferences(user.id)
         await query.message.reply_text("🏆 **Sélection :**", reply_markup=build_leagues_keyboard(prefs["selected_leagues"], prefs["is_premium"]), parse_mode='Markdown')
         return
+        
     if data == "go_upgrade":
         await query.message.delete()
         await upgrade_command(update, context)
         return
+        
     if data == "confirm_delete":
         headers = await get_teable_headers()
         async with httpx.AsyncClient() as client:
@@ -189,19 +192,38 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prefs = await get_user_preferences(user.id)
     selected = prefs["selected_leagues"]
+    is_premium = prefs["is_premium"]
+
     if data in ALL_LEAGUES:
-        if ALL_LEAGUES[data]["premium"] and not prefs["is_premium"]:
-            await query.answer("🏆 Premium requis !", show_alert=True)
-            return
+        league = ALL_LEAGUES[data]
+        
+        # 1. Si déjà sélectionné, on retire
         if data in selected:
             selected.remove(data)
+            await query.answer(f"Retiré : {league['name']}")
+        
+        # 2. Si on veut ajouter
         else:
-            if not prefs["is_premium"]: selected.clear() # Remplacement auto
+            if not is_premium:
+                # Vérifier si c'est une ligue Premium (L1 et PL ont premium=False)
+                if league["premium"]:
+                    await query.answer("🏆 Ce championnat nécessite un abonnement Premium !", show_alert=True)
+                    return
+                # Limite de 1 pour gratuit : on remplace
+                if len(selected) >= 1:
+                    selected.clear()
+                    await query.answer(f"Ligue remplacée par {league['name']}")
+                else:
+                    await query.answer(f"Ajouté : {league['name']}")
+            else:
+                await query.answer(f"Ajouté : {league['name']}")
+            
             selected.append(data)
         
         name = user.username if user.username else user.first_name
-        await update_user_preferences(user.id, name, selected, prefs["is_premium"])
-        await query.edit_message_reply_markup(reply_markup=build_leagues_keyboard(selected, prefs["is_premium"]))
+        await update_user_preferences(user.id, name, selected, is_premium)
+        await query.edit_message_reply_markup(reply_markup=build_leagues_keyboard(selected, is_premium))
+        
     elif data == "validate":
         await query.edit_message_text("✅ Enregistré ! À lundi.")
 
