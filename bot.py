@@ -9,6 +9,7 @@ Stockage des preferences utilisateur via Teable API
 
 import os
 import json
+from urllib.parse import quote
 import logging
 import asyncio
 import traceback
@@ -50,19 +51,19 @@ SERVICE_NAME = "Your Weekly Football Resume"
 SERVICE_SHORT = "YWFR"
 
 # Emojis simples
-EMOJI_SOCCER = "\u26BD"      # â½
-EMOJI_CHECK = "\u2705"       # â
-EMOJI_STAR = "\u2B50"        # â­
-EMOJI_TROPHY = "\U0001F3C6"  # ð
-EMOJI_PIN = "\U0001F4CD"     # ð
+EMOJI_SOCCER = "\u26BD"      # Ã¢ÂÂ½
+EMOJI_CHECK = "\u2705"       # Ã¢ÂÂ
+EMOJI_STAR = "\u2B50"        # Ã¢Â­Â
+EMOJI_TROPHY = "\U0001F3C6"  # Ã°ÂÂÂ
+EMOJI_PIN = "\U0001F4CD"     # Ã°ÂÂÂ
 
 # Drapeaux pays (sequences Unicode)
-FLAG_FR = "\U0001F1EB\U0001F1F7"  # ð«ð·
-FLAG_GB = "\U0001F1EC\U0001F1E7"  # ð¬ð§
-FLAG_ES = "\U0001F1EA\U0001F1F8"  # ðªð¸
-FLAG_IT = "\U0001F1EE\U0001F1F9"  # ð®ð¹
-FLAG_DE = "\U0001F1E9\U0001F1EA"  # ð©ðª
-FLAG_EU = "\U0001F1EA\U0001F1FA"  # ðªðº
+FLAG_FR = "\U0001F1EB\U0001F1F7"  # Ã°ÂÂÂ«Ã°ÂÂÂ·
+FLAG_GB = "\U0001F1EC\U0001F1E7"  # Ã°ÂÂÂ¬Ã°ÂÂÂ§
+FLAG_ES = "\U0001F1EA\U0001F1F8"  # Ã°ÂÂÂªÃ°ÂÂÂ¸
+FLAG_IT = "\U0001F1EE\U0001F1F9"  # Ã°ÂÂÂ®Ã°ÂÂÂ¹
+FLAG_DE = "\U0001F1E9\U0001F1EA"  # Ã°ÂÂÂ©Ã°ÂÂÂª
+FLAG_EU = "\U0001F1EA\U0001F1FA"  # Ã°ÂÂÂªÃ°ÂÂÂº
 
 # Championnats disponibles avec leur ID Football-Data
 LEAGUES = {
@@ -99,7 +100,8 @@ async def update_user_preferences(user_id: int, username: str, selected_leagues:
     async with httpx.AsyncClient() as client:
         try:
             # 1. Chercher si l'utilisateur existe deja
-            search_url = f"https://app.teable.ai/api/table/tbleoX3giJgStjjLCds/record?fieldKeyType=name&filter={{"field":"user_id","operator":"=","value":{user_id}}}"
+            filter_json = json.dumps({"conjunction":"and","filterSet":[{"fieldId":"fldOJAk8jnO1KRRapu6","operator":"is","value":user_id}]})
+            search_url = f"{TEABLE_API_URL}?fieldKeyType=name&filter={quote(filter_json)}"
             
             logger.debug(f"Recherche utilisateur {user_id} dans Teable")
             response = await client.get(search_url, headers=headers)
