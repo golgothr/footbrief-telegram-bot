@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FootBrief Telegram Bot - Koyeb Web Service Version
-Bot de rÃ©sumÃ©s de matchs de football avec modÃ¨le freemium
-Utilise webhook Telegram + serveur Starlette
+FootBrief Telegram Bot - Version corrigee
+Bot de resumes de matchs de football avec modele freemium
+Utilise webhook Telegram + serveur Starlette sur port 8000
 """
 
 import os
@@ -41,376 +41,419 @@ GOOGLE_SHEET_ID = os.environ.get('GOOGLE_SHEET_ID', '1y6qjUmY90MdRqoa5UXOZ2EUgFr
 WEBHOOK_PATH = "/webhook"
 PORT = int(os.environ.get('PORT', 8000))
 
-# Championnats disponibles avec emojis drapeaux
+# Emojis simples
+EMOJI_SOCCER = "\u26BD"      # â½
+EMOJI_CHECK = "\u2705"       # â
+EMOJI_STAR = "\u2B50"        # â­
+EMOJI_TROPHY = "\U0001F3C6"  # ð
+EMOJI_PIN = "\U0001F4CD"     # ð
+
+# Drapeaux pays (sequences Unicode)
+FLAG_FR = "\U0001F1EB\U0001F1F7"  # ð«ð·
+FLAG_GB = "\U0001F1EC\U0001F1E7"  # ð¬ð§
+FLAG_ES = "\U0001F1EA\U0001F1F8"  # ðªð¸
+FLAG_IT = "\U0001F1EE\U0001F1F9"  # ð®ð¹
+FLAG_DE = "\U0001F1E9\U0001F1EA"  # ð©ðª
+FLAG_BE = "\U0001F1E7\U0001F1EA"  # ð§ðª
+FLAG_NL = "\U0001F1F3\U0001F1F1"  # ð³ð±
+FLAG_PT = "\U0001F1F5\U0001F1F9"  # ðµð¹
+FLAG_CH = "\U0001F1E8\U0001F1ED"  # ð¨ð­
+FLAG_DK = "\U0001F1E9\U0001F1F0"  # ð©ð°
+FLAG_IE = "\U0001F1EE\U0001F1EA"  # ð®ðª
+FLAG_US = "\U0001F1FA\U0001F1F8"  # ðºð¸
+FLAG_AR = "\U0001F1E6\U0001F1F7"  # ð¦ð·
+FLAG_MX = "\U0001F1F2\U0001F1FD"  # ð²ð½
+FLAG_MA = "\U0001F1F2\U0001F1E6"  # ð²ð¦
+FLAG_KR = "\U0001F1F0\U0001F1F7"  # ð°ð·
+FLAG_EU = "\U0001F1EA\U0001F1FA"  # ðªðº
+FLAG_WORLD = "\U0001F30D"         # ð
+
+# Championnats disponibles
 LEAGUES = {
     # Europe Top 5
-    'lg_fr': {'name': 'ð«ð· Ligue 1', 'category': 'europe_top'},
-    'lg_uk': {'name': 'ð´ó §ó ¢ó ¥ó ®ó §ó ¿ Premier League', 'category': 'europe_top'},
-    'lg_es': {'name': 'ðªð¸ La Liga', 'category': 'europe_top'},
-    'lg_de': {'name': 'ð©ðª Bundesliga', 'category': 'europe_top'},
-    'lg_it': {'name': 'ð®ð¹ Serie A', 'category': 'europe_top'},
+    'lg_fr': {'name': f'{FLAG_FR} Ligue 1', 'category': 'europe_top'},
+    'lg_uk': {'name': f'{FLAG_GB} Premier League', 'category': 'europe_top'},
+    'lg_es': {'name': f'{FLAG_ES} La Liga', 'category': 'europe_top'},
+    'lg_de': {'name': f'{FLAG_DE} Bundesliga', 'category': 'europe_top'},
+    'lg_it': {'name': f'{FLAG_IT} Serie A', 'category': 'europe_top'},
     # Europe Autres
-    'lg_pt': {'name': 'ðµð¹ Liga Portugal', 'category': 'europe_other'},
-    'lg_nl': {'name': 'ð³ð± Eredivisie', 'category': 'europe_other'},
-    'lg_be': {'name': 'ð§ðª Pro League', 'category': 'europe_other'},
-    'lg_tr': {'name': 'ð¹ð· SÃ¼per Lig', 'category': 'europe_other'},
-    'lg_ru': {'name': 'ð·ðº Premier Liga', 'category': 'europe_other'},
-    # AmÃ©riques
-    'lg_br': {'name': 'ð§ð· BrasileirÃ£o', 'category': 'americas'},
-    'lg_ar': {'name': 'ð¦ð· Liga Argentina', 'category': 'americas'},
-    'lg_mx': {'name': 'ð²ð½ Liga MX', 'category': 'americas'},
-    'lg_us': {'name': 'ðºð¸ MLS', 'category': 'americas'},
-    # Afrique & Asie
-    'lg_sa': {'name': 'ð¸ð¦ Saudi Pro League', 'category': 'africa_asia'},
-    'lg_jp': {'name': 'ð¯ðµ J-League', 'category': 'africa_asia'},
-    'lg_cn': {'name': 'ð¨ð³ Chinese Super League', 'category': 'africa_asia'},
+    'lg_be': {'name': f'{FLAG_BE} Jupiler Pro League', 'category': 'europe_other'},
+    'lg_nl': {'name': f'{FLAG_NL} Eredivisie', 'category': 'europe_other'},
+    'lg_pt': {'name': f'{FLAG_PT} Liga Portugal', 'category': 'europe_other'},
+    'lg_ch': {'name': f'{FLAG_CH} Super League Suisse', 'category': 'europe_other'},
+    'lg_dk': {'name': f'{FLAG_DK} Superligaen', 'category': 'europe_other'},
+    'lg_ie': {'name': f'{FLAG_IE} League of Ireland', 'category': 'europe_other'},
+    # International
+    'lg_us': {'name': f'{FLAG_US} MLS', 'category': 'international'},
+    'lg_ar': {'name': f'{FLAG_AR} Liga Argentina', 'category': 'international'},
+    'lg_mx': {'name': f'{FLAG_MX} Liga MX', 'category': 'international'},
+    'lg_ma': {'name': f'{FLAG_MA} Botola Pro', 'category': 'international'},
+    'lg_kr': {'name': f'{FLAG_KR} K-League', 'category': 'international'},
+    # Competitions
+    'lg_ucl': {'name': f'{EMOJI_TROPHY} Ligue des Champions', 'category': 'competitions'},
+    'lg_uel': {'name': f'{EMOJI_STAR} Ligue Europa', 'category': 'competitions'},
+    'lg_uecl': {'name': f'{EMOJI_SOCCER} Conference League', 'category': 'competitions'},
 }
 
-# CatÃ©gories avec emojis
+# Categories de championnats
 CATEGORIES = {
-    'europe_top': {'name': 'ð Europe Top 5', 'callback': 'cat_europe_top'},
-    'europe_other': {'name': 'ðªðº Europe Autres', 'callback': 'cat_europe_other'},
-    'americas': {'name': 'ð AmÃ©riques', 'callback': 'cat_americas'},
-    'africa_asia': {'name': 'ðð Afrique & Asie', 'callback': 'cat_africa_asia'},
+    'europe_top': {'name': f'{EMOJI_TROPHY} Europe Top 5', 'callback': 'cat_europe_top'},
+    'europe_other': {'name': f'{FLAG_EU} Europe Autres', 'callback': 'cat_europe_other'},
+    'international': {'name': f'{FLAG_WORLD} International', 'callback': 'cat_international'},
+    'competitions': {'name': f'{EMOJI_STAR} Competitions', 'callback': 'cat_competitions'},
 }
 
-# Variables globales
-application = None
-google_sheet = None
+# Variable globale pour le client Google Sheets
+gs_client = None
 
-
-def get_google_sheet():
-    """Connexion Ã  Google Sheets avec les credentials depuis variable d'env"""
-    global google_sheet
-    if google_sheet is None:
+def init_google_sheets():
+    """Initialise le client Google Sheets avec les credentials."""
+    global gs_client
+    
+    try:
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+        if not creds_json:
+            logger.error("GOOGLE_CREDENTIALS non defini dans les variables d'environnement")
+            return None
+        
+        logger.info(f"GOOGLE_CREDENTIALS trouve, longueur: {len(creds_json)}")
+        
+        # Parser le JSON
         try:
-            creds_json = os.environ.get('GOOGLE_CREDENTIALS')
-            if creds_json:
-                creds_dict = json.loads(creds_json)
-                credentials = Credentials.from_service_account_info(
-                    creds_dict,
-                    scopes=['https://www.googleapis.com/auth/spreadsheets']
-                )
-                gc = gspread.authorize(credentials)
-                google_sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
-                logger.info("â Connexion Google Sheets Ã©tablie")
-            else:
-                logger.warning("â ï¸ GOOGLE_CREDENTIALS non dÃ©fini")
-        except Exception as e:
-            logger.error(f"â Erreur Google Sheets: {e}")
-    return google_sheet
-
-
-def get_user_data(user_id: int) -> dict:
-    """RÃ©cupÃ¨re les donnÃ©es d'un utilisateur depuis Google Sheets"""
-    sheet = get_google_sheet()
-    if not sheet:
-        return None
-    try:
-        records = sheet.get_all_records()
-        for record in records:
-            if str(record.get('user_id')) == str(user_id):
-                return record
-        return None
+            creds_data = json.loads(creds_json)
+            logger.info(f"JSON parse avec succes, type: {creds_data.get('type', 'inconnu')}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Erreur parsing JSON credentials: {e}")
+            return None
+        
+        # Creer les credentials
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
+        gs_client = gspread.authorize(credentials)
+        
+        logger.info("Client Google Sheets initialise avec succes")
+        return gs_client
+        
     except Exception as e:
-        logger.error(f"â Erreur lecture user {user_id}: {e}")
+        logger.error(f"Erreur initialisation Google Sheets: {e}")
         return None
 
-
-def save_user_data(user_id: int, username: str, leagues: list = None, is_premium: bool = False):
-    """Sauvegarde ou met Ã  jour les donnÃ©es d'un utilisateur"""
-    sheet = get_google_sheet()
-    if not sheet:
-        return False
+def update_user_preferences(user_id: int, username: str, selected_league: str):
+    """Met a jour les preferences utilisateur dans Google Sheets."""
+    global gs_client
+    
     try:
-        leagues_str = ','.join(leagues) if leagues else ''
-        records = sheet.get_all_records()
+        if not gs_client:
+            logger.info("Client GS non initialise, tentative d'initialisation...")
+            init_google_sheets()
         
-        for i, record in enumerate(records):
-            if str(record.get('user_id')) == str(user_id):
-                row_num = i + 2
-                sheet.update(f'A{row_num}:D{row_num}', [[str(user_id), username, leagues_str, str(is_premium)]])
-                logger.info(f"â User {user_id} mis Ã  jour")
-                return True
+        if not gs_client:
+            logger.error("Impossible d'initialiser Google Sheets")
+            return False
         
-        sheet.append_row([str(user_id), username, leagues_str, str(is_premium)])
-        logger.info(f"â Nouveau user {user_id} ajoutÃ©")
+        # Ouvrir le spreadsheet
+        spreadsheet = gs_client.open_by_key(GOOGLE_SHEET_ID)
+        logger.info(f"Spreadsheet ouvert: {spreadsheet.title}")
+        
+        # Chercher ou creer la feuille "users"
+        try:
+            worksheet = spreadsheet.worksheet("users")
+            logger.info("Feuille 'users' trouvee")
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title="users", rows=1000, cols=10)
+            worksheet.update('A1:E1', [['user_id', 'username', 'selected_league', 'league_name', 'updated_at']])
+            logger.info("Feuille 'users' creee")
+        
+        # Nom de la ligue
+        league_info = LEAGUES.get(selected_league, {})
+        league_name = league_info.get('name', selected_league)
+        
+        # Chercher l'utilisateur existant
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        try:
+            cell = worksheet.find(str(user_id))
+            row = cell.row
+            worksheet.update(f'A{row}:E{row}', [[str(user_id), username or '', selected_league, league_name, timestamp]])
+            logger.info(f"Utilisateur {user_id} mis a jour: {selected_league}")
+        except gspread.CellNotFound:
+            next_row = len(worksheet.get_all_values()) + 1
+            worksheet.update(f'A{next_row}:E{next_row}', [[str(user_id), username or '', selected_league, league_name, timestamp]])
+            logger.info(f"Nouvel utilisateur {user_id} ajoute: {selected_league}")
+        
         return True
+        
     except Exception as e:
-        logger.error(f"â Erreur sauvegarde user {user_id}: {e}")
+        logger.error(f"Erreur mise a jour Google Sheets: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
+# Variable globale pour l'application Telegram
+telegram_app = None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /start - Message de bienvenue engageant"""
+    """Handler pour la commande /start."""
     user = update.effective_user
+    logger.info(f"Commande /start de {user.id} ({user.username})")
     
-    welcome_message = (
-        f"â½ <b>Bienvenue sur FootBrief, {user.first_name} !</b> ð\n\n"
-        f"ð Ton assistant personnel pour les <b>rÃ©sumÃ©s de matchs</b> de football !\n\n"
-        f"ð± <b>Comment Ã§a marche ?</b>\n"
-        f"1ï¸â£ Choisis tes championnats favoris\n"
-        f"2ï¸â£ ReÃ§ois chaque jour les rÃ©sumÃ©s des matchs\n"
-        f"3ï¸â£ Reste informÃ© sans effort ! ðª\n\n"
-        f"ð <b>PrÃªt Ã  commencer ?</b> Clique sur le bouton ci-dessous !"
+    welcome_text = f"""<b>{EMOJI_SOCCER} Bienvenue sur FootBrief !</b>
+
+Bonjour <b>{user.first_name}</b> !
+
+Je suis ton assistant pour les resumes de matchs de football.
+
+{EMOJI_CHECK} <b>Comment ca marche :</b>
+1. Choisis ton championnat prefere
+2. Recois des resumes des matchs
+
+{EMOJI_STAR} Utilise /ligues pour selectionner ton championnat"""
+
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode="HTML"
     )
-    
-    keyboard = [[InlineKeyboardButton("â½ Choisir mes ligues", callback_data="menu_ligues")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    save_user_data(user.id, user.username or user.first_name)
-    
-    await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode="HTML")
-
-
-async def menu_ligues(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Affiche le menu des catÃ©gories de ligues avec emojis"""
-    query = update.callback_query
-    await query.answer()
-    
-    message = (
-        "ðï¸ <b>Choisis une catÃ©gorie</b>\n\n"
-        "SÃ©lectionne la rÃ©gion qui t'intÃ©resse :"
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("ð Europe Top 5", callback_data="cat_europe_top")],
-        [InlineKeyboardButton("ðªðº Europe Autres", callback_data="cat_europe_other")],
-        [InlineKeyboardButton("ð AmÃ©riques", callback_data="cat_americas")],
-        [InlineKeyboardButton("ðð Afrique & Asie", callback_data="cat_africa_asia")],
-        [InlineKeyboardButton("â Terminer la sÃ©lection", callback_data="finish_selection")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="HTML")
-
-
-async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Affiche les championnats d'une catÃ©gorie avec drapeaux"""
-    query = update.callback_query
-    await query.answer()
-    
-    category = query.data.replace('cat_', '')
-    user_id = query.from_user.id
-    
-    user_data = get_user_data(user_id)
-    selected_leagues = []
-    if user_data and user_data.get('selected_leagues'):
-        selected_leagues = user_data['selected_leagues'].split(',')
-    
-    category_names = {
-        'europe_top': 'ð Europe Top 5',
-        'europe_other': 'ðªðº Europe Autres',
-        'americas': 'ð AmÃ©riques',
-        'africa_asia': 'ðð Afrique & Asie',
-    }
-    
-    message = f"<b>{category_names.get(category, 'Championnats')}</b>\n\nSÃ©lectionne tes championnats :"
-    
-    keyboard = []
-    for league_id, league_info in LEAGUES.items():
-        if league_info['category'] == category:
-            is_selected = league_id in selected_leagues
-            check = "â " if is_selected else ""
-            btn_text = f"{check}{league_info['name']}"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"toggle_{league_id}")])
-    
-    keyboard.append([InlineKeyboardButton("â¬ï¸ Retour aux catÃ©gories", callback_data="menu_ligues")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="HTML")
-
-
-async def toggle_league(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle la sÃ©lection d'une ligue"""
-    query = update.callback_query
-    await query.answer()
-    
-    league_id = query.data.replace('toggle_', '')
-    user_id = query.from_user.id
-    username = query.from_user.username or query.from_user.first_name
-    
-    user_data = get_user_data(user_id)
-    selected_leagues = []
-    if user_data and user_data.get('selected_leagues'):
-        selected_leagues = user_data['selected_leagues'].split(',')
-    
-    if league_id in selected_leagues:
-        selected_leagues.remove(league_id)
-    else:
-        selected_leagues.append(league_id)
-    
-    save_user_data(user_id, username, selected_leagues)
-    
-    category = LEAGUES[league_id]['category']
-    
-    category_names = {
-        'europe_top': 'ð Europe Top 5',
-        'europe_other': 'ðªðº Europe Autres',
-        'americas': 'ð AmÃ©riques',
-        'africa_asia': 'ðð Afrique & Asie',
-    }
-    
-    message = f"<b>{category_names.get(category, 'Championnats')}</b>\n\nSÃ©lectionne tes championnats :"
-    
-    keyboard = []
-    for lid, league_info in LEAGUES.items():
-        if league_info['category'] == category:
-            is_selected = lid in selected_leagues
-            check = "â " if is_selected else ""
-            btn_text = f"{check}{league_info['name']}"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"toggle_{lid}")])
-    
-    keyboard.append([InlineKeyboardButton("â¬ï¸ Retour aux catÃ©gories", callback_data="menu_ligues")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="HTML")
-
-
-async def finish_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Confirme la sÃ©lection avec message de succÃ¨s"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    user_data = get_user_data(user_id)
-    
-    selected_leagues = []
-    if user_data and user_data.get('selected_leagues'):
-        selected_leagues = user_data['selected_leagues'].split(',')
-    
-    if selected_leagues:
-        league_names = [LEAGUES[lid]['name'] for lid in selected_leagues if lid in LEAGUES]
-        leagues_text = "\n".join([f"  â¢ {name}" for name in league_names])
-        
-        message = (
-            f"ð <b>Parfait !</b> â\n\n"
-            f"â½ Tu recevras les rÃ©sumÃ©s pour :\n{leagues_text}\n\n"
-            f"ð¬ Les rÃ©sumÃ©s arrivent chaque matin Ã  9h !\n\n"
-            f"ð¡ <i>Utilise /ligues pour modifier ta sÃ©lection</i>"
-        )
-    else:
-        message = (
-            f"â ï¸ <b>Aucun championnat sÃ©lectionnÃ©</b>\n\n"
-            f"Clique sur le bouton ci-dessous pour choisir tes ligues favorites !"
-        )
-    
-    keyboard = [[InlineKeyboardButton("â½ Modifier mes ligues", callback_data="menu_ligues")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="HTML")
-
 
 async def ligues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /ligues - AccÃ¨s direct au menu des ligues"""
-    message = (
-        "ðï¸ <b>Gestion de tes championnats</b>\n\n"
-        "SÃ©lectionne une catÃ©gorie pour voir les championnats disponibles :"
-    )
+    """Handler pour la commande /ligues - affiche les categories."""
+    logger.info(f"Commande /ligues de {update.effective_user.id}")
     
-    keyboard = [
-        [InlineKeyboardButton("ð Europe Top 5", callback_data="cat_europe_top")],
-        [InlineKeyboardButton("ðªðº Europe Autres", callback_data="cat_europe_other")],
-        [InlineKeyboardButton("ð AmÃ©riques", callback_data="cat_americas")],
-        [InlineKeyboardButton("ðð Afrique & Asie", callback_data="cat_africa_asia")],
-        [InlineKeyboardButton("â Voir ma sÃ©lection", callback_data="finish_selection")],
-    ]
+    keyboard = []
+    for cat_id, cat_info in CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(cat_info['name'], callback_data=cat_info['callback'])])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="HTML")
+    text = f"""<b>{EMOJI_SOCCER} Choisis une categorie</b>
 
+Selectionne la categorie de championnat qui t'interesse :"""
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /help - Aide"""
-    message = (
-        "â¹ï¸ <b>Aide FootBrief</b>\n\n"
-        "ð <b>Commandes disponibles :</b>\n"
-        "  â¢ /start - DÃ©marrer le bot\n"
-        "  â¢ /ligues - GÃ©rer tes championnats\n"
-        "  â¢ /help - Afficher cette aide\n\n"
-        "â½ <b>Fonctionnement :</b>\n"
-        "Choisis tes championnats favoris et reÃ§ois "
-        "chaque matin un rÃ©sumÃ© des matchs de la veille !\n\n"
-        "ð¬ <b>Questions ?</b>\n"
-        "Contacte @footbrief_support"
+    await update.message.reply_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pour les boutons inline."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user = update.effective_user
+    
+    logger.info(f"Callback '{data}' de {user.id} ({user.username})")
+    
+    # Gestion des categories
+    if data.startswith('cat_'):
+        category = data.replace('cat_', '')
+        await show_leagues_for_category(query, category)
+        return
+    
+    # Gestion de la selection d'une ligue
+    if data.startswith('lg_'):
+        await handle_league_selection(query, data, user)
+        return
+    
+    # Retour au menu
+    if data == 'back_categories':
+        await show_categories_menu(query)
+        return
+
+async def show_leagues_for_category(query, category: str):
+    """Affiche les ligues d'une categorie."""
+    keyboard = []
+    
+    for lg_id, lg_info in LEAGUES.items():
+        if lg_info['category'] == category:
+            keyboard.append([InlineKeyboardButton(lg_info['name'], callback_data=lg_id)])
+    
+    keyboard.append([InlineKeyboardButton(f"{EMOJI_PIN} Retour", callback_data='back_categories')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    cat_name = CATEGORIES.get(category, {}).get('name', 'Championnats')
+    
+    text = f"""<b>{cat_name}</b>
+
+Selectionne ton championnat :"""
+
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
+
+async def show_categories_menu(query):
+    """Affiche le menu des categories."""
+    keyboard = []
+    for cat_id, cat_info in CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(cat_info['name'], callback_data=cat_info['callback'])])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"""<b>{EMOJI_SOCCER} Choisis une categorie</b>
+
+Selectionne la categorie de championnat qui t'interesse :"""
+
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
+
+async def handle_league_selection(query, league_id: str, user):
+    """Gere la selection d'une ligue."""
+    league_info = LEAGUES.get(league_id, {})
+    league_name = league_info.get('name', league_id)
+    
+    logger.info(f"Selection ligue {league_id} ({league_name}) par {user.id}")
+    
+    # Mettre a jour Google Sheets
+    success = update_user_preferences(
+        user_id=user.id,
+        username=user.username or user.first_name,
+        selected_league=league_id
     )
     
-    await update.message.reply_text(message, parse_mode="HTML")
+    if success:
+        text = f"""<b>{EMOJI_CHECK} Championnat enregistre !</b>
 
+Tu as selectionne : <b>{league_name}</b>
 
-async def webhook_handler(request: Request):
-    """GÃ¨re les requÃªtes webhook de Telegram"""
-    global application
-    try:
-        data = await request.json()
-        logger.info(f"ð¨ Webhook reÃ§u: {json.dumps(data, indent=2)[:500]}")
+{EMOJI_STAR} Tu recevras maintenant les resumes des matchs de ce championnat.
+
+{EMOJI_PIN} Pour changer, utilise /ligues"""
         
-        if application:
-            update = Update.de_json(data, application.bot)
-            await application.process_update(update)
+        logger.info(f"Preference sauvegardee avec succes pour {user.id}")
+    else:
+        text = f"""<b>{EMOJI_CHECK} Championnat selectionne</b>
+
+Tu as choisi : <b>{league_name}</b>
+
+{EMOJI_PIN} Note : La sauvegarde n'a pas fonctionne, mais tu peux continuer.
+Utilise /ligues pour reessayer."""
         
-        return JSONResponse({"status": "ok"})
-    except Exception as e:
-        logger.error(f"â Erreur webhook: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        logger.warning(f"Echec sauvegarde pour {user.id}")
+    
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML"
+    )
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pour la commande /help."""
+    help_text = f"""<b>{EMOJI_SOCCER} Aide FootBrief</b>
 
+<b>Commandes disponibles :</b>
+/start - Demarrer le bot
+/ligues - Choisir ton championnat
+/help - Afficher cette aide
+
+<b>Championnats disponibles :</b>
+{EMOJI_TROPHY} Europe Top 5 (Ligue 1, Premier League, etc.)
+{FLAG_EU} Europe Autres
+{FLAG_WORLD} International
+{EMOJI_STAR} Competitions UEFA
+
+<b>Contact :</b>
+Pour toute question, contacte l'administrateur."""
+
+    await update.message.reply_text(help_text, parse_mode="HTML")
+
+# Routes HTTP
 async def health_check(request: Request):
-    """Health check pour Koyeb"""
-    return PlainTextResponse("OK")
-
-
-async def root(request: Request):
-    """Page d'accueil"""
+    """Endpoint de health check."""
     return JSONResponse({
-        "service": "FootBrief Telegram Bot",
-        "status": "running",
-        "version": "2.0.0",
-        "endpoints": {
-            "webhook": WEBHOOK_PATH,
-            "health": "/health"
-        }
+        "status": "ok",
+        "bot": "FootBrief",
+        "timestamp": datetime.now().isoformat()
     })
 
+async def webhook_handler(request: Request):
+    """Handler pour les webhooks Telegram."""
+    global telegram_app
+    
+    try:
+        data = await request.json()
+        logger.info(f"Webhook recu: {json.dumps(data)[:500]}")
+        
+        if telegram_app:
+            update = Update.de_json(data, telegram_app.bot)
+            await telegram_app.process_update(update)
+            return JSONResponse({"status": "ok"})
+        else:
+            logger.error("telegram_app non initialise")
+            return JSONResponse({"status": "error", "message": "Bot not ready"}, status_code=503)
+            
+    except Exception as e:
+        logger.error(f"Erreur webhook: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @asynccontextmanager
 async def lifespan(app):
-    """Gestion du cycle de vie de l'application"""
-    global application
+    """Gestion du cycle de vie de l'application."""
+    global telegram_app
     
-    logger.info("ð DÃ©marrage de l'application...")
+    logger.info("Demarrage de l'application...")
     
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    # Initialiser Google Sheets
+    init_google_sheets()
     
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("ligues", ligues_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(menu_ligues, pattern="^menu_ligues$"))
-    application.add_handler(CallbackQueryHandler(show_category, pattern="^cat_"))
-    application.add_handler(CallbackQueryHandler(toggle_league, pattern="^toggle_"))
-    application.add_handler(CallbackQueryHandler(finish_selection, pattern="^finish_selection$"))
+    # Creer l'application Telegram
+    telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    await application.initialize()
-    await application.start()
+    # Ajouter les handlers
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("ligues", ligues_command))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CallbackQueryHandler(button_callback))
     
-    get_google_sheet()
+    # Initialiser l'application Telegram
+    await telegram_app.initialize()
+    await telegram_app.start()
     
-    logger.info("â Application prÃªte!")
+    # Configurer le webhook
+    webhook_url = os.environ.get('WEBHOOK_URL')
+    if webhook_url:
+        full_webhook_url = f"{webhook_url}{WEBHOOK_PATH}"
+        try:
+            await telegram_app.bot.set_webhook(url=full_webhook_url)
+            logger.info(f"Webhook configure: {full_webhook_url}")
+        except Exception as e:
+            logger.error(f"Erreur configuration webhook: {e}")
+    else:
+        logger.warning("WEBHOOK_URL non defini")
+    
+    logger.info(f"Bot demarre sur le port {PORT}")
     
     yield
     
-    logger.info("ð ArrÃªt de l'application...")
-    await application.stop()
-    await application.shutdown()
+    # Cleanup
+    logger.info("Arret de l'application...")
+    if telegram_app:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
 
-
+# Configuration des routes
 routes = [
-    Route("/", endpoint=root),
-    Route("/health", endpoint=health_check),
-    Route(WEBHOOK_PATH, endpoint=webhook_handler, methods=["POST"]),
+    Route("/", health_check, methods=["GET"]),
+    Route("/health", health_check, methods=["GET"]),
+    Route(WEBHOOK_PATH, webhook_handler, methods=["POST"]),
 ]
 
-app = Starlette(routes=routes, lifespan=lifespan)
+# Creation de l'application Starlette
+app = Starlette(
+    debug=False,
+    routes=routes,
+    lifespan=lifespan
+)
 
 if __name__ == "__main__":
     import uvicorn
