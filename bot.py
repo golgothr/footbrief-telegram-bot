@@ -42,8 +42,8 @@ WEBHOOK_PATH = "/webhook"
 PORT = int(os.environ.get('PORT', 8000))
 
 # Configuration Teable API
-TEABLE_API_URL = "https://app.teable.ai/api/table/tbleoX3giJgStjjLCds/record"
-TEABLE_TOKEN = "teable_accNFuvqPcryS3BFJlV_LQJB7Jg+8YAuP/ffNrVPo5r4rkOPznHxVD5HzMAIVcI="
+TEABLE_API_URL = os.getenv("TEABLE_API_URL")
+TEABLE_TOKEN = os.getenv("TEABLE_TOKEN")
 
 # Nom du service
 SERVICE_NAME = "Your Weekly Football Resume"
