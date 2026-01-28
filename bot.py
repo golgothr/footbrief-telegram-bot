@@ -20,25 +20,26 @@ from telegram.ext import (
 )
 import httpx
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION LOGS ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# --- VARIABLES D'ENVIRONNEMENT ---
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TEABLE_TOKEN = os.environ.get('TEABLE_TOKEN')
 TEABLE_API_URL = os.environ.get('TEABLE_API_URL') 
 PORT = int(os.environ.get('PORT', 8000))
 
-# --- IDS DES CHAMPS TEABLE (Extraits de tes notes) ---
+# --- IDS DES CHAMPS TEABLE (Tes fldXXX réels) ---
 FLD_USER_ID = "fldOJAk8jnO1KRRapu6"
 FLD_USERNAME = "fldUWEWNqO4WI69RyvG"
 FLD_LEAGUES = "fldHthW8Lgy1xzDHnca"
 FLD_PREMIUM = "fldfnTldzqcCZsbmUCd"
 
-# --- DONNÉES DES LIGUES ---
+# --- DONNÉES DES LIGUES (16 Championnats) ---
 LEAGUES = {
     "lg_fr": {"name": "🇫🇷 Ligue 1", "premium": False},
     "lg_uk": {"name": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", "premium": False},
@@ -60,7 +61,7 @@ LEAGUES = {
 
 telegram_app = None
 
-# --- LOGIQUE TEABLE (MISE À JOUR AVEC FIELD_ID) ---
+# --- LOGIQUE TEABLE (Version corrigée et robuste) ---
 
 async def get_teable_headers():
     return {
@@ -70,43 +71,55 @@ async def get_teable_headers():
 
 async def update_user_preferences(user_id: int, username: str, selected_leagues: list, is_premium: bool = False):
     headers = await get_teable_headers()
-    leagues_json = json.dumps(selected_leagues)
+    user_id_int = int(user_id)
+    
     async with httpx.AsyncClient() as client:
         try:
-            # OBLIGATOIRE : Utiliser le fieldId réel pour le filtre
-            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value":user_id}]}
+            # 1. RECHERCHE DE L'UTILISATEUR (Filtre par Field ID obligatoire)
+            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value": user_id_int}]}
             search_url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
             
-            resp = await client.get(search_url, headers=headers)
-            data = resp.json()
-            records = data.get("records", [])
+            resp_search = await client.get(search_url, headers=headers)
+            records = resp_search.json().get("records", [])
 
-            fields = {
-                "user_id": user_id,
-                "username": username or "Anonyme",
-                "selected_leagues": leagues_json,
-                "is_premium": is_premium
+            fields_data = {
+                "user_id": user_id_int,
+                "username": str(username) if username else "Anonyme",
+                "selected_leagues": json.dumps(selected_leagues),
+                "is_premium": bool(is_premium)
             }
 
             if records:
-                # PATCH : nécessite le recordId dans l'URL
+                # 2. MISE À JOUR (PATCH)
                 record_id = records[0]["id"]
                 url = f"{TEABLE_API_URL}/record/{record_id}"
-                await client.patch(url, headers=headers, json={"fieldKeyType": "name", "record": {"fields": fields}})
+                payload = {
+                    "fieldKeyType": "name",
+                    "record": {"fields": fields_data}
+                }
+                res = await client.patch(url, headers=headers, json=payload)
             else:
-                # POST : création d'un nouveau record
+                # 3. CRÉATION (POST)
                 url = f"{TEABLE_API_URL}/record"
-                await client.post(url, headers=headers, json={"fieldKeyType": "name", "records": [{"fields": fields}]})
-            return True
+                payload = {
+                    "fieldKeyType": "name", 
+                    "records": [{"fields": fields_data}]
+                }
+                res = await client.post(url, headers=headers, json=payload)
+            
+            if res.status_code not in [200, 201]:
+                logger.error(f"❌ Erreur Teable {res.status_code}: {res.text}")
+            return res.status_code in [200, 201]
+
         except Exception as e:
-            logger.error(f"Erreur Teable Sync: {e}")
+            logger.error(f"💥 Erreur update_user_preferences: {e}")
             return False
 
 async def get_user_preferences(user_id: int) -> dict:
     headers = await get_teable_headers()
     async with httpx.AsyncClient() as client:
         try:
-            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value":user_id}]}
+            filter_params = {"conjunction":"and","filterSet":[{"fieldId": FLD_USER_ID,"operator":"is","value": int(user_id)}]}
             url = f"{TEABLE_API_URL}/record?fieldKeyType=name&filter={quote(json.dumps(filter_params))}"
             resp = await client.get(url, headers=headers)
             records = resp.json().get("records", [])
@@ -116,23 +129,25 @@ async def get_user_preferences(user_id: int) -> dict:
                     "selected_leagues": json.loads(f.get("selected_leagues", "[]")),
                     "is_premium": f.get("is_premium", False)
                 }
-        except Exception as e:
-            logger.error(f"Erreur Teable Read: {e}")
+        except Exception:
+            pass
         return {"selected_leagues": [], "is_premium": False}
 
 # --- HANDLERS TELEGRAM ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    # Enregistrement immédiat dans Teable
     await update_user_preferences(user.id, user.username, [], False)
+    
     welcome_text = (
         "⚽ **Bienvenue sur YWFR !**\n\n"
-        "Chaque lundi matin, je vous envoie un résumé complet de vos championnats favoris.\n\n"
-        "🎁 **Gratuit :** 1 ligue au choix (🇫🇷 ou 🏴󠁧󠁢󠁥󠁮󠁧󠁿).\n"
+        "Votre bot qui résume l'actu foot chaque lundi matin.\n\n"
+        "🎁 **Gratuit :** 1 championnat au choix (🇫🇷 ou 🏴󠁧󠁢󠁥󠁮󠁧󠁿).\n"
         "⭐ **Premium :** Accès illimité aux 16 championnats mondiaux.\n\n"
-        "Commandes :\n"
+        "📌 **Commandes :**\n"
         "/ligues - Choisir mes championnats\n"
-        "/compte - Mon profil"
+        "/compte - Voir mon statut et mes choix"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
@@ -141,11 +156,13 @@ async def ligues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefs = await get_user_preferences(user.id)
     selected = prefs["selected_leagues"]
     is_premium = prefs["is_premium"]
+
     keyboard = []
     for lid, info in LEAGUES.items():
         st = "✅ " if lid in selected else ("⭐ " if info["premium"] and not is_premium else "🔹 ")
         keyboard.append([InlineKeyboardButton(f"{st}{info['name']}", callback_data=lid)])
-    keyboard.append([InlineKeyboardButton("💾 Valider", callback_data="validate")])
+    keyboard.append([InlineKeyboardButton("💾 Valider la sélection", callback_data="validate")])
+    
     await update.message.reply_text("🏆 **Sélectionnez vos championnats :**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,37 +170,48 @@ async def compte_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefs = await get_user_preferences(user.id)
     noms = [LEAGUES[c]["name"] for c in prefs["selected_leagues"] if c in LEAGUES]
     status = "⭐ Premium" if prefs["is_premium"] else "🔹 Gratuit"
+    
     text = (
         f"👤 **Votre Compte YWFR**\n\n"
-        f"📈 **Statut :** {status}\n"
-        f"📋 **Ligues suivies :**\n" + ("\n".join([f"- {n}" for n in noms]) if noms else "_Aucune_") +
-        f"\n\n_Utilisez /ligues pour modifier vos choix._"
+        f"🆔 **ID :** `{user.id}`\n"
+        f"📈 **Statut :** {status}\n\n"
+        f"📋 **Ligues suivies :**\n" + ("\n".join([f"- {n}" for n in noms]) if noms else "_Aucune ligue sélectionnée._") +
+        f"\n\n💡 _Pour modifier, utilisez /ligues._"
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user = query.from_user
+    
     if query.data in LEAGUES:
-        prefs = await get_user_preferences(query.from_user.id)
+        prefs = await get_user_preferences(user.id)
         selected = prefs["selected_leagues"]
+        
+        # Logique Freemium
         if LEAGUES[query.data]["premium"] and not prefs["is_premium"]:
-            await query.answer("🏆 Abonnement Premium requis !", show_alert=True)
+            await query.answer("🏆 Ce championnat nécessite un abonnement Premium !", show_alert=True)
             return
         if not prefs["is_premium"] and len(selected) >= 1 and query.data not in selected:
-            await query.answer("📍 Mode gratuit limité à 1 championnat.", show_alert=True)
+            await query.answer("📍 Mode gratuit limité à 1 seul championnat.", show_alert=True)
             return
+
         if query.data in selected: selected.remove(query.data)
         else: selected.append(query.data)
-        await update_user_preferences(query.from_user.id, query.from_user.username, selected, prefs["is_premium"])
+        
+        await update_user_preferences(user.id, user.username, selected, prefs["is_premium"])
+        
+        # Mise à jour du clavier
         keyboard = []
         for lid, info in LEAGUES.items():
             st = "✅ " if lid in selected else ("⭐ " if info["premium"] and not prefs["is_premium"] else "🔹 ")
             keyboard.append([InlineKeyboardButton(f"{st}{info['name']}", callback_data=lid)])
-        keyboard.append([InlineKeyboardButton("💾 Valider", callback_data="validate")])
+        keyboard.append([InlineKeyboardButton("💾 Valider la sélection", callback_data="validate")])
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif query.data == "validate":
-        await query.edit_message_text("✅ Préférences enregistrées !")
+        await query.edit_message_text("✅ Vos préférences ont été enregistrées. À lundi !")
 
 # --- SERVEUR STARLETTE ---
 
@@ -195,10 +223,13 @@ async def lifespan(app: Starlette):
     telegram_app.add_handler(CommandHandler("ligues", ligues_command))
     telegram_app.add_handler(CommandHandler("compte", compte_command))
     telegram_app.add_handler(CallbackQueryHandler(button_callback))
+    
     await telegram_app.initialize()
     await telegram_app.start()
+    logger.info("Bot démarré")
     yield
     await telegram_app.stop()
+    await telegram_app.shutdown()
 
 async def webhook_handler(request: Request):
     data = await request.json()
